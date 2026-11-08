@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^npm create vite@latest web -- --template react$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

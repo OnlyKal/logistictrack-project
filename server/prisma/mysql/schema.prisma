@@ -1,0 +1,1263 @@
+// FICHIER GÉNÉRÉ — ne pas modifier. Source : prisma/schema.prisma (npm run db:mysql:schema)
+// LogisticTrack — source unique du modèle de données.
+// Moteur de développement : SQLite. Le schéma MySQL (prisma/mysql/schema.prisma) est GÉNÉRÉ
+// à partir de ce fichier par scripts/gen-mysql-schema.mjs.
+// Un commentaire « <attributs> » ajoute des attributs natifs côté MySQL uniquement.
+// Statuts stockés en chaînes : SQLite ne gère pas les enums Prisma. Valeurs : src/common/constants.ts
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Organisation et sécurité ----------
+
+model Company {
+  id          String    @id @default(uuid())
+  tradeName   String
+  legalName   String?
+  logoFileId  String?
+  description String? @db.Text
+  taxId       String?
+  rccm        String?
+  address     String?
+  country     String?
+  province    String?
+  city        String?
+  phone       String?
+  email       String    @unique
+  sector      String?
+  status      String    @default("pending")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  settings              CompanySettings?
+  agencies              Agency[]
+  companyMemberships    CompanyMembership[]
+  auditLogs             AuditLog[]
+  uploadedFiles         UploadedFile[]
+  warehouses            Warehouse[]
+  productCategories     ProductCategory[]
+  products              Product[]
+  stockBalances         StockBalance[]
+  stockMovements        StockMovement[]
+  stockTransfers        StockTransfer[]
+  inventorySessions     InventorySession[]
+  suppliers             Supplier[]
+  purchaseOrders        PurchaseOrder[]
+  goodsReceipts         GoodsReceipt[]
+  customers             Customer[]
+  orders                Order[]
+  drivers               Driver[]
+  vehicles              Vehicle[]
+  routes                Route[]
+  deliveries            Delivery[]
+  packages              Package[]
+  trackingSessions      TrackingSession[]
+  subscriptions         Subscription[]
+  subscriptionInvoices  SubscriptionInvoice[]
+  payments              Payment[]
+  notifications         Notification[]
+  notificationTemplates NotificationTemplate[]
+
+  @@index([status])
+}
+
+model CompanySettings {
+  companyId            String  @id
+  company              Company @relation(fields: [companyId], references: [id])
+  stockStrategy        String  @default("FIFO")
+  useLocations         Boolean @default(false)
+  driversCanRefuse     Boolean @default(true)
+  requireSignature     Boolean @default(true)
+  requirePhoto         Boolean @default(false)
+  requireRecipientName Boolean @default(true)
+  requireGpsOnProof    Boolean @default(false)
+  requireQrOnLoad      Boolean @default(false)
+  gpsRetentionDays     Int     @default(90)
+  currency             String  @default("USD")
+  timezone             String  @default("Africa/Kinshasa")
+  locale               String  @default("fr")
+  /// E-mails aux clients, désactivés par défaut : chaque entreprise choisit.
+  customerEmailEnRoute   Boolean @default(false)
+  customerEmailDelivered Boolean @default(false)
+  customerEmailFailed    Boolean @default(false)
+}
+
+model Agency {
+  id         String      @id @default(uuid())
+  companyId  String
+  company    Company     @relation(fields: [companyId], references: [id])
+  name       String
+  code       String
+  address    String?
+  phone      String?
+  manager    String?
+  latitude   Float?
+  longitude  Float?
+  status     String      @default("active")
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+  warehouses Warehouse[]
+
+  @@unique([companyId, code])
+}
+
+model User {
+  id                 String              @id @default(uuid())
+  fullName           String
+  email              String?             @unique
+  phone              String?             @unique
+  passwordHash       String
+  isSuperAdmin       Boolean             @default(false)
+  isActive           Boolean             @default(true)
+  /// Blocage temporaire après trop de mots de passe faux.
+  failedLogins       Int                 @default(0)
+  lockedUntil        DateTime?
+  locale             String              @default("fr")
+  lastLoginAt        DateTime?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  companyMemberships CompanyMembership[]
+  userSessions       UserSession[]
+  passwordResets     PasswordReset[]
+  auditLogs          AuditLog[]
+  stockMovements     StockMovement[]
+  driver             Driver?
+  notifications      Notification[]
+}
+
+model CompanyMembership {
+  id                String      @id @default(uuid())
+  companyId         String
+  company           Company     @relation(fields: [companyId], references: [id])
+  userId            String
+  user              User        @relation(fields: [userId], references: [id])
+  role              String
+  customPermissions String? @db.Text
+  allWarehouses     Boolean     @default(true)
+  isActive          Boolean     @default(true)
+  createdAt         DateTime    @default(now())
+  scopes            UserScope[]
+
+  @@unique([companyId, userId])
+  @@index([userId])
+}
+
+model UserScope {
+  id           String            @id @default(uuid())
+  membershipId String
+  membership   CompanyMembership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  warehouseId  String
+  warehouse    Warehouse         @relation(fields: [warehouseId], references: [id])
+
+  @@unique([membershipId, warehouseId])
+}
+
+model UserSession {
+  id               String    @id @default(uuid())
+  userId           String
+  user             User      @relation(fields: [userId], references: [id])
+  companyId        String?
+  refreshTokenHash String    @unique
+  /// Jetons de rafraîchissement dérivés : une réponse perdue se rejoue sans fermer la session.
+  refreshSalt      String?
+  generation       Int       @default(0)
+  userAgent        String?
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model PasswordReset {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id])
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  action    String
+  entity    String?
+  entityId  String?
+  details   String? @db.Text
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([companyId, createdAt])
+  @@index([action])
+}
+
+model IdempotencyKey {
+  id         String   @id @default(uuid())
+  scope      String
+  key        String
+  status     String   @default("processing")
+  httpStatus Int?
+  response   String? @db.LongText
+  createdAt  DateTime @default(now())
+
+  @@unique([scope, key])
+}
+
+model Sequence {
+  companyId String
+  name      String
+  value     Int    @default(0)
+
+  @@id([companyId, name])
+}
+
+model UploadedFile {
+  id                String            @id @default(uuid())
+  companyId         String?
+  company           Company?          @relation(fields: [companyId], references: [id])
+  uploadedById      String?
+  storageKey        String
+  originalName      String?
+  mimeType          String
+  size              Int
+  sha256            String
+  createdAt         DateTime          @default(now())
+  proofOfDeliveries ProofOfDelivery[]
+
+  @@index([companyId])
+}
+
+// ---------- Entrepôts ----------
+
+model Warehouse {
+  id          String   @id @default(uuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id])
+  agencyId    String?
+  agency      Agency?  @relation(fields: [agencyId], references: [id])
+  name        String
+  code        String
+  type        String   @default("GENERAL")
+  address     String?
+  latitude    Float?
+  longitude   Float?
+  manager     String?
+  phone       String?
+  maxCapacity Decimal? @db.Decimal(18,3)
+  surface     Decimal? @db.Decimal(18,3)
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  zones              WarehouseZone[]
+  transfersFrom      StockTransfer[]     @relation("TransferFrom")
+  transfersTo        StockTransfer[]     @relation("TransferTo")
+  userScopes         UserScope[]
+  warehouseLocations WarehouseLocation[]
+  stockBalances      StockBalance[]
+  stockMovements     StockMovement[]
+  inventorySessions  InventorySession[]
+  purchaseOrders     PurchaseOrder[]
+  goodsReceipts      GoodsReceipt[]
+  orders             Order[]
+  drivers            Driver[]
+  routes             Route[]
+  deliveries         Delivery[]
+  packages           Package[]
+
+  @@unique([companyId, code])
+}
+
+model WarehouseZone {
+  id          String           @id @default(uuid())
+  companyId   String
+  warehouseId String
+  warehouse   Warehouse        @relation(fields: [warehouseId], references: [id])
+  name        String
+  code        String
+  kind        String           @default("STORAGE")
+  aisles      WarehouseAisle[]
+
+  @@unique([warehouseId, code])
+  @@index([companyId])
+}
+
+model WarehouseAisle {
+  id        String              @id @default(uuid())
+  zoneId    String
+  zone      WarehouseZone       @relation(fields: [zoneId], references: [id])
+  name      String
+  code      String
+  locations WarehouseLocation[]
+
+  @@unique([zoneId, code])
+}
+
+model WarehouseLocation {
+  id                String             @id @default(uuid())
+  companyId         String
+  warehouseId       String
+  warehouse         Warehouse          @relation(fields: [warehouseId], references: [id])
+  aisleId           String?
+  aisle             WarehouseAisle?    @relation(fields: [aisleId], references: [id])
+  code              String
+  shelf             String?
+  compartment       String?
+  qrToken           String             @unique
+  isActive          Boolean            @default(true)
+  stockBalances     StockBalance[]
+  stockMovements    StockMovement[]
+  goodsReceiptItems GoodsReceiptItem[]
+
+  @@unique([warehouseId, code])
+  @@index([companyId])
+}
+
+// ---------- Produits ----------
+
+model ProductCategory {
+  id        String    @id @default(uuid())
+  companyId String
+  company   Company   @relation(fields: [companyId], references: [id])
+  name      String
+  products  Product[]
+
+  @@unique([companyId, name])
+}
+
+model Product {
+  id               String           @id @default(uuid())
+  companyId        String
+  company          Company          @relation(fields: [companyId], references: [id])
+  categoryId       String?
+  category         ProductCategory? @relation(fields: [categoryId], references: [id])
+  name             String
+  reference        String
+  description      String? @db.Text
+  brand            String?
+  photoFileId      String?
+  barcode          String?
+  physicalNature   String           @default("SOLID")
+  baseUnit         String           @default("unit")
+  unitWeightKg     Decimal? @db.Decimal(18,3)
+  unitVolumeM3     Decimal? @db.Decimal(18,4)
+  dimensions       String?
+  storageCondition String?
+  fragility        String           @default("NONE")
+  hazardClass      String?
+  requiredVehicle  String?
+  unitCost         Decimal? @db.Decimal(18,2)
+  salePrice        Decimal? @db.Decimal(18,2)
+  lowStockLevel    Decimal? @db.Decimal(18,3)
+  trackBatches     Boolean          @default(false)
+  isActive         Boolean          @default(true)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  deletedAt        DateTime?
+
+  packagings         ProductPackaging[]
+  batches            ProductBatch[]
+  stockBalances      StockBalance[]
+  stockMovements     StockMovement[]
+  stockTransferItems StockTransferItem[]
+  purchaseOrderItems PurchaseOrderItem[]
+  goodsReceiptItems  GoodsReceiptItem[]
+  orderItems         OrderItem[]
+  deliveryItems      DeliveryItem[]
+  packageItems       PackageItem[]
+
+  @@unique([companyId, reference])
+  @@index([companyId, name])
+  @@index([companyId, barcode])
+}
+
+model ProductPackaging {
+  id              String  @id @default(uuid())
+  companyId       String
+  productId       String
+  product         Product @relation(fields: [productId], references: [id])
+  name            String
+  type            String
+  quantityPerUnit Decimal @db.Decimal(18,3)
+  barcode         String?
+
+  @@unique([productId, name])
+  @@index([companyId])
+}
+
+model ProductBatch {
+  id                String             @id @default(uuid())
+  companyId         String
+  productId         String
+  product           Product            @relation(fields: [productId], references: [id])
+  supplierId        String?
+  supplier          Supplier?          @relation(fields: [supplierId], references: [id])
+  batchNumber       String
+  manufacturedAt    DateTime?
+  expiresAt         DateTime?
+  receivedAt        DateTime           @default(now())
+  quantityReceived  Decimal            @default(0) @db.Decimal(18,3)
+  stockBalances     StockBalance[]
+  stockMovements    StockMovement[]
+  goodsReceiptItems GoodsReceiptItem[]
+
+  @@unique([productId, batchNumber])
+  @@index([companyId, expiresAt])
+}
+
+// ---------- Stocks ----------
+
+model StockBalance {
+  id                String             @id @default(uuid())
+  companyId         String
+  company           Company            @relation(fields: [companyId], references: [id])
+  balanceKey        String             @unique
+  warehouseId       String
+  warehouse         Warehouse          @relation(fields: [warehouseId], references: [id])
+  locationId        String?
+  location          WarehouseLocation? @relation(fields: [locationId], references: [id])
+  productId         String
+  product           Product            @relation(fields: [productId], references: [id])
+  batchId           String?
+  batch             ProductBatch?      @relation(fields: [batchId], references: [id])
+  onHand            Decimal            @default(0) @db.Decimal(18,3)
+  reserved          Decimal            @default(0) @db.Decimal(18,3)
+  blocked           Decimal            @default(0) @db.Decimal(18,3)
+  damaged           Decimal            @default(0) @db.Decimal(18,3)
+  version           Int                @default(0)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  stockReservations StockReservation[]
+  inventoryItems    InventoryItem[]
+
+  @@index([companyId, warehouseId])
+  @@index([companyId, productId])
+}
+
+model StockMovement {
+  id             String             @id @default(uuid())
+  companyId      String
+  company        Company            @relation(fields: [companyId], references: [id])
+  direction      String
+  reason         String
+  status         String             @default("CLOSED")
+  warehouseId    String
+  warehouse      Warehouse          @relation(fields: [warehouseId], references: [id])
+  locationId     String?
+  location       WarehouseLocation? @relation(fields: [locationId], references: [id])
+  productId      String
+  product        Product            @relation(fields: [productId], references: [id])
+  batchId        String?
+  batch          ProductBatch?      @relation(fields: [batchId], references: [id])
+  quantity       Decimal @db.Decimal(18,3)
+  quantityBefore Decimal @db.Decimal(18,3)
+  quantityAfter  Decimal @db.Decimal(18,3)
+  refType        String?
+  refId          String?
+  note           String? @db.Text
+  createdById    String?
+  createdBy      User?              @relation(fields: [createdById], references: [id])
+  createdAt      DateTime           @default(now())
+
+  @@index([companyId, createdAt])
+  @@index([companyId, warehouseId, createdAt])
+  @@index([companyId, productId])
+  @@index([refType, refId])
+}
+
+model StockReservation {
+  id             String             @id @default(uuid())
+  companyId      String
+  balanceId      String
+  balance        StockBalance       @relation(fields: [balanceId], references: [id])
+  quantity       Decimal @db.Decimal(18,3)
+  status         String             @default("ACTIVE")
+  orderItemId    String?
+  orderItem      OrderItem?         @relation(fields: [orderItemId], references: [id])
+  transferItemId String?
+  transferItem   StockTransferItem? @relation(fields: [transferItemId], references: [id])
+  deliveryItemId String?
+  deliveryItem   DeliveryItem?      @relation(fields: [deliveryItemId], references: [id])
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  @@index([companyId, status])
+}
+
+model StockTransfer {
+  id              String              @id @default(uuid())
+  companyId       String
+  company         Company             @relation(fields: [companyId], references: [id])
+  number          String
+  fromWarehouseId String
+  fromWarehouse   Warehouse           @relation("TransferFrom", fields: [fromWarehouseId], references: [id])
+  toWarehouseId   String
+  toWarehouse     Warehouse           @relation("TransferTo", fields: [toWarehouseId], references: [id])
+  status          String              @default("DRAFT")
+  note            String? @db.Text
+  createdById     String?
+  validatedAt     DateTime?
+  dispatchedAt    DateTime?
+  receivedAt      DateTime?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  items           StockTransferItem[]
+
+  @@unique([companyId, number])
+  @@index([companyId, status])
+}
+
+model StockTransferItem {
+  id                String             @id @default(uuid())
+  transferId        String
+  transfer          StockTransfer      @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  productId         String
+  product           Product            @relation(fields: [productId], references: [id])
+  quantity          Decimal @db.Decimal(18,3)
+  quantityReceived  Decimal            @default(0) @db.Decimal(18,3)
+  allocations       String? @db.Text
+  stockReservations StockReservation[]
+}
+
+model InventorySession {
+  id          String          @id @default(uuid())
+  companyId   String
+  company     Company         @relation(fields: [companyId], references: [id])
+  warehouseId String
+  warehouse   Warehouse       @relation(fields: [warehouseId], references: [id])
+  number      String
+  kind        String          @default("FULL")
+  status      String          @default("OPEN")
+  createdById String?
+  closedById  String?
+  closedAt    DateTime?
+  createdAt   DateTime        @default(now())
+  items       InventoryItem[]
+
+  @@unique([companyId, number])
+}
+
+model InventoryItem {
+  id            String           @id @default(uuid())
+  sessionId     String
+  session       InventorySession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  balanceId     String
+  balance       StockBalance     @relation(fields: [balanceId], references: [id])
+  theoretical   Decimal @db.Decimal(18,3)
+  counted       Decimal? @db.Decimal(18,3)
+  justification String?
+
+  @@unique([sessionId, balanceId])
+}
+
+// ---------- Approvisionnement ----------
+
+model Supplier {
+  id             String          @id @default(uuid())
+  companyId      String
+  company        Company         @relation(fields: [companyId], references: [id])
+  name           String
+  contact        String?
+  phone          String?
+  email          String?
+  address        String?
+  isActive       Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  productBatches ProductBatch[]
+  purchaseOrders PurchaseOrder[]
+  goodsReceipts  GoodsReceipt[]
+
+  @@unique([companyId, name])
+}
+
+model PurchaseOrder {
+  id            String              @id @default(uuid())
+  companyId     String
+  company       Company             @relation(fields: [companyId], references: [id])
+  supplierId    String
+  supplier      Supplier            @relation(fields: [supplierId], references: [id])
+  warehouseId   String
+  warehouse     Warehouse           @relation(fields: [warehouseId], references: [id])
+  number        String
+  status        String              @default("DRAFT")
+  expectedAt    DateTime?
+  note          String? @db.Text
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  items         PurchaseOrderItem[]
+  goodsReceipts GoodsReceipt[]
+
+  @@unique([companyId, number])
+}
+
+model PurchaseOrderItem {
+  id               String        @id @default(uuid())
+  purchaseOrderId  String
+  purchaseOrder    PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  productId        String
+  product          Product       @relation(fields: [productId], references: [id])
+  quantity         Decimal @db.Decimal(18,3)
+  quantityReceived Decimal       @default(0) @db.Decimal(18,3)
+  unitCost         Decimal? @db.Decimal(18,2)
+}
+
+model GoodsReceipt {
+  id              String             @id @default(uuid())
+  companyId       String
+  company         Company            @relation(fields: [companyId], references: [id])
+  number          String
+  supplierId      String?
+  supplier        Supplier?          @relation(fields: [supplierId], references: [id])
+  purchaseOrderId String?
+  purchaseOrder   PurchaseOrder?     @relation(fields: [purchaseOrderId], references: [id])
+  warehouseId     String
+  warehouse       Warehouse          @relation(fields: [warehouseId], references: [id])
+  reason          String             @default("SUPPLIER")
+  note            String? @db.Text
+  createdById     String?
+  createdAt       DateTime           @default(now())
+  items           GoodsReceiptItem[]
+
+  @@unique([companyId, number])
+}
+
+model GoodsReceiptItem {
+  id         String             @id @default(uuid())
+  receiptId  String
+  receipt    GoodsReceipt       @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  productId  String
+  product    Product            @relation(fields: [productId], references: [id])
+  batchId    String?
+  batch      ProductBatch?      @relation(fields: [batchId], references: [id])
+  locationId String?
+  location   WarehouseLocation? @relation(fields: [locationId], references: [id])
+  quantity   Decimal @db.Decimal(18,3)
+  unitCost   Decimal? @db.Decimal(18,2)
+}
+
+// ---------- Clients ----------
+
+model Customer {
+  id        String   @id @default(uuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id])
+  code      String
+  name      String
+  type      String   @default("COMPANY")
+  phone     String?
+  email     String?
+  address   String?
+  notes     String? @db.Text
+  status    String   @default("active")
+  /// Le client peut refuser les e-mails de livraison, même si l'entreprise les a activés.
+  emailNotifications Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  contacts       CustomerContact[]
+  deliveryPoints DeliveryPoint[]
+  orders         Order[]
+  deliveries     Delivery[]
+
+  @@unique([companyId, code])
+  @@index([companyId, name])
+}
+
+model CustomerContact {
+  id         String   @id @default(uuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  name       String
+  phone      String?
+  email      String?
+  role       String?
+}
+
+model DeliveryPoint {
+  id           String     @id @default(uuid())
+  companyId    String
+  customerId   String
+  customer     Customer   @relation(fields: [customerId], references: [id])
+  name         String
+  address      String
+  commune      String?
+  city         String?
+  latitude     Float?
+  longitude    Float?
+  contactName  String?
+  phone        String?
+  openingHours String?
+  instructions String? @db.Text
+  restrictions String? @db.Text
+  isActive     Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  orders       Order[]
+  deliveries   Delivery[]
+
+  @@index([companyId, customerId])
+}
+
+// ---------- Commandes ----------
+
+model Order {
+  id              String        @id @default(uuid())
+  companyId       String
+  company         Company       @relation(fields: [companyId], references: [id])
+  number          String
+  customerId      String
+  customer        Customer      @relation(fields: [customerId], references: [id])
+  deliveryPointId String
+  deliveryPoint   DeliveryPoint @relation(fields: [deliveryPointId], references: [id])
+  warehouseId     String
+  warehouse       Warehouse     @relation(fields: [warehouseId], references: [id])
+  status          String        @default("DRAFT")
+  orderDate       DateTime      @default(now())
+  requestedDate   DateTime?
+  instructions    String? @db.Text
+  discountTotal   Decimal       @default(0) @db.Decimal(18,2)
+  taxTotal        Decimal       @default(0) @db.Decimal(18,2)
+  total           Decimal       @default(0) @db.Decimal(18,2)
+  createdById     String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  items      OrderItem[]
+  history    OrderStatusHistory[]
+  deliveries Delivery[]
+  packages   Package[]
+
+  @@unique([companyId, number])
+  @@index([companyId, status])
+  @@index([companyId, createdAt])
+}
+
+model OrderItem {
+  id                String             @id @default(uuid())
+  orderId           String
+  order             Order              @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId         String
+  product           Product            @relation(fields: [productId], references: [id])
+  quantity          Decimal @db.Decimal(18,3)
+  quantityPrepared  Decimal            @default(0) @db.Decimal(18,3)
+  quantityPackaged  Decimal            @default(0) @db.Decimal(18,3)
+  quantityShipped   Decimal            @default(0) @db.Decimal(18,3)
+  quantityDelivered Decimal            @default(0) @db.Decimal(18,3)
+  unitPrice         Decimal            @default(0) @db.Decimal(18,2)
+  discount          Decimal            @default(0) @db.Decimal(18,2)
+  taxRate           Decimal            @default(0) @db.Decimal(6,3)
+  stockReservations StockReservation[]
+  deliveryItems     DeliveryItem[]
+  packageItems      PackageItem[]
+}
+
+model OrderStatusHistory {
+  id        String   @id @default(uuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  status    String
+  userId    String?
+  note      String?
+  createdAt DateTime @default(now())
+}
+
+// ---------- Transport ----------
+
+model Driver {
+  id                  String               @id @default(uuid())
+  companyId           String
+  company             Company              @relation(fields: [companyId], references: [id])
+  userId              String               @unique
+  user                User                 @relation(fields: [userId], references: [id])
+  code                String
+  fullName            String
+  photoFileId         String?
+  phone               String
+  address             String?
+  idDocument          String?
+  licenseNumber       String?
+  licenseClasses      String?
+  licenseExpiry       DateTime?
+  warehouseId         String?
+  warehouse           Warehouse?           @relation(fields: [warehouseId], references: [id])
+  status              String               @default("available")
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  deletedAt           DateTime?
+  routes              Route[]
+  deliveries          Delivery[]
+  deliveryAssignments DeliveryAssignment[]
+  trackingSessions    TrackingSession[]
+
+  @@unique([companyId, code])
+  @@index([companyId, status])
+}
+
+model Vehicle {
+  id               String    @id @default(uuid())
+  companyId        String
+  company          Company   @relation(fields: [companyId], references: [id])
+  registration     String
+  brand            String?
+  model            String?
+  type             String
+  weightCapacityKg Decimal? @db.Decimal(18,3)
+  volumeCapacityM3 Decimal? @db.Decimal(18,3)
+  insuranceExpiry  DateTime?
+  inspectionExpiry DateTime?
+  status           String    @default("available")
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
+
+  documents           VehicleDocument[]
+  maintenance         VehicleMaintenance[]
+  routes              Route[]
+  deliveries          Delivery[]
+  deliveryAssignments DeliveryAssignment[]
+
+  @@unique([companyId, registration])
+  @@index([companyId, status])
+}
+
+model VehicleDocument {
+  id        String    @id @default(uuid())
+  vehicleId String
+  vehicle   Vehicle   @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  type      String
+  fileId    String?
+  expiresAt DateTime?
+}
+
+model VehicleMaintenance {
+  id          String    @id @default(uuid())
+  vehicleId   String
+  vehicle     Vehicle   @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  description String
+  startedAt   DateTime  @default(now())
+  finishedAt  DateTime?
+  cost        Decimal? @db.Decimal(18,2)
+}
+
+model Route {
+  id               String               @id @default(uuid())
+  companyId        String
+  company          Company              @relation(fields: [companyId], references: [id])
+  number           String
+  plannedAt        DateTime
+  driverId         String?
+  driver           Driver?              @relation(fields: [driverId], references: [id])
+  vehicleId        String?
+  vehicle          Vehicle?             @relation(fields: [vehicleId], references: [id])
+  warehouseId      String
+  warehouse        Warehouse            @relation(fields: [warehouseId], references: [id])
+  status           String               @default("PLANNED")
+  startedAt        DateTime?
+  finishedAt       DateTime?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  stops            RouteStop[]
+  history          RouteStatusHistory[]
+  trackingSessions TrackingSession[]
+
+  @@unique([companyId, number])
+  @@index([companyId, status])
+}
+
+model RouteStatusHistory {
+  id        String   @id @default(uuid())
+  routeId   String
+  route     Route    @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  status    String
+  userId    String?
+  createdAt DateTime @default(now())
+}
+
+model RouteStop {
+  id         String   @id @default(uuid())
+  routeId    String
+  route      Route    @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  deliveryId String
+  delivery   Delivery @relation(fields: [deliveryId], references: [id])
+  position   Int
+
+  @@unique([routeId, deliveryId])
+}
+
+// ---------- Logistique ----------
+
+model Delivery {
+  id              String        @id @default(uuid())
+  companyId       String
+  company         Company       @relation(fields: [companyId], references: [id])
+  number          String
+  orderId         String?
+  order           Order?        @relation(fields: [orderId], references: [id])
+  customerId      String
+  customer        Customer      @relation(fields: [customerId], references: [id])
+  deliveryPointId String
+  deliveryPoint   DeliveryPoint @relation(fields: [deliveryPointId], references: [id])
+  warehouseId     String
+  warehouse       Warehouse     @relation(fields: [warehouseId], references: [id])
+  driverId        String?
+  driver          Driver?       @relation(fields: [driverId], references: [id])
+  vehicleId       String?
+  vehicle         Vehicle?      @relation(fields: [vehicleId], references: [id])
+  status          String        @default("DRAFT")
+  driverResponse  String?
+  priority        String        @default("NORMAL")
+  scheduledAt     DateTime?
+  instructions    String? @db.Text
+  justification   String? @db.Text
+  stockIssued     Boolean       @default(false)
+  stockReturned   Boolean       @default(false)
+  attempts        Int           @default(1)
+  failureReason   String?
+  failureComment  String? @db.Text
+  recipientName   String?
+  recipientPhone  String?
+  deliveredAt     DateTime?
+  createdById     String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  items            DeliveryItem[]
+  packages         Package[]
+  history          DeliveryStatusHistory[]
+  events           DeliveryEvent[]
+  proofs           ProofOfDelivery[]
+  incidents        DeliveryIncident[]
+  assignments      DeliveryAssignment[]
+  stops            RouteStop[]
+  trackingSessions TrackingSession[]
+
+  @@unique([companyId, number])
+  @@index([companyId, status])
+  @@index([companyId, scheduledAt])
+  @@index([companyId, driverId, status])
+}
+
+model DeliveryItem {
+  id                String             @id @default(uuid())
+  deliveryId        String
+  delivery          Delivery           @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  productId         String
+  product           Product            @relation(fields: [productId], references: [id])
+  orderItemId       String?
+  orderItem         OrderItem?         @relation(fields: [orderItemId], references: [id])
+  quantity          Decimal @db.Decimal(18,3)
+  quantityDelivered Decimal            @default(0) @db.Decimal(18,3)
+  quantityRefused   Decimal            @default(0) @db.Decimal(18,3)
+  quantityMissing   Decimal            @default(0) @db.Decimal(18,3)
+  quantityReturned  Decimal            @default(0) @db.Decimal(18,3)
+  discrepancyReason String?
+  allocations       String? @db.Text
+  stockReservations StockReservation[]
+}
+
+model DeliveryStatusHistory {
+  id         String   @id @default(uuid())
+  deliveryId String
+  delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  fromStatus String?
+  status     String
+  userId     String?
+  note       String? @db.Text
+  createdAt  DateTime @default(now())
+
+  @@index([deliveryId, createdAt])
+}
+
+model DeliveryAssignment {
+  id         String   @id @default(uuid())
+  deliveryId String
+  delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  driverId   String
+  driver     Driver   @relation(fields: [driverId], references: [id])
+  vehicleId  String
+  vehicle    Vehicle  @relation(fields: [vehicleId], references: [id])
+  assignedBy String?
+  response   String?
+  createdAt  DateTime @default(now())
+}
+
+model DeliveryEvent {
+  id         String   @id @default(uuid())
+  companyId  String
+  deliveryId String
+  delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  type       String
+  label      String
+  isPublic   Boolean  @default(false)
+  latitude   Float?
+  longitude  Float?
+  note       String? @db.Text
+  clientOpId String?  @unique
+  occurredAt DateTime @default(now())
+  receivedAt DateTime @default(now())
+  userId     String?
+
+  @@index([deliveryId, occurredAt])
+}
+
+model ProofOfDelivery {
+  id          String        @id @default(uuid())
+  companyId   String
+  deliveryId  String
+  delivery    Delivery      @relation(fields: [deliveryId], references: [id])
+  type        String
+  fileId      String?
+  file        UploadedFile? @relation(fields: [fileId], references: [id])
+  value       String?
+  latitude    Float?
+  longitude   Float?
+  capturedAt  DateTime
+  receivedAt  DateTime      @default(now())
+  sha256      String?
+  clientOpId  String?       @unique
+  createdById String?
+
+  @@index([deliveryId])
+}
+
+model DeliveryIncident {
+  id           String    @id @default(uuid())
+  companyId    String
+  deliveryId   String
+  delivery     Delivery  @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  type         String
+  description  String? @db.Text
+  status       String    @default("OPEN")
+  clientOpId   String?   @unique
+  reportedAt   DateTime  @default(now())
+  resolvedAt   DateTime?
+  reportedById String?
+}
+
+model Package {
+  id               String        @id @default(uuid())
+  companyId        String
+  company          Company       @relation(fields: [companyId], references: [id])
+  trackingNumber   String        @unique
+  trackingToken    String        @unique
+  qrToken          String        @unique
+  orderId          String?
+  order            Order?        @relation(fields: [orderId], references: [id])
+  deliveryId       String?
+  delivery         Delivery?     @relation(fields: [deliveryId], references: [id])
+  warehouseId      String
+  warehouse        Warehouse     @relation(fields: [warehouseId], references: [id])
+  unitType         String        @default("CARTON")
+  weightKg         Decimal? @db.Decimal(18,3)
+  volumeM3         Decimal? @db.Decimal(18,4)
+  dimensions       String?
+  photoFileId      String?
+  transportNote    String?
+  status           String        @default("CREATED")
+  loadScannedAt    DateTime?
+  deliverScannedAt DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  items            PackageItem[]
+
+  @@index([companyId, status])
+  @@index([deliveryId])
+}
+
+model PackageItem {
+  id          String     @id @default(uuid())
+  packageId   String
+  package     Package    @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product    @relation(fields: [productId], references: [id])
+  orderItemId String?
+  orderItem   OrderItem? @relation(fields: [orderItemId], references: [id])
+  quantity    Decimal @db.Decimal(18,3)
+}
+
+// ---------- Suivi GPS (téléphone du chauffeur uniquement) ----------
+
+model TrackingSession {
+  id         String        @id @default(uuid())
+  companyId  String
+  company    Company       @relation(fields: [companyId], references: [id])
+  driverId   String
+  driver     Driver        @relation(fields: [driverId], references: [id])
+  deliveryId String?
+  delivery   Delivery?     @relation(fields: [deliveryId], references: [id])
+  routeId    String?
+  route      Route?        @relation(fields: [routeId], references: [id])
+  startedAt  DateTime      @default(now())
+  stoppedAt  DateTime?
+  positions  GpsPosition[]
+
+  @@index([companyId, stoppedAt])
+  @@index([driverId, stoppedAt])
+}
+
+model GpsPosition {
+  id           String          @id @default(uuid())
+  companyId    String
+  sessionId    String
+  session      TrackingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  driverId     String
+  clientId     String          @unique
+  latitude     Float
+  longitude    Float
+  accuracyM    Float?
+  speedMs      Float?
+  headingDeg   Float?
+  altitudeM    Float?
+  batteryLevel Int?
+  isOnline     Boolean?
+  recordedAt   DateTime
+  receivedAt   DateTime        @default(now())
+
+  @@index([sessionId, recordedAt])
+  @@index([companyId, driverId, recordedAt])
+  @@index([recordedAt])
+}
+
+// ---------- SaaS ----------
+
+model Subscription {
+  id                   String                @id @default(uuid())
+  companyId            String
+  company              Company               @relation(fields: [companyId], references: [id])
+  monthlyAmount        Decimal               @default(0) @db.Decimal(18,2)
+  currency             String                @default("USD")
+  durationMonths       Int                   @default(1)
+  maxWarehouses        Int?
+  maxUsers             Int?
+  maxDrivers           Int?
+  maxVehicles          Int?
+  maxDeliveriesMonth   Int?
+  gpsEnabled           Boolean               @default(true)
+  graceDays            Int                   @default(7)
+  status               String                @default("TRIAL")
+  isCurrent            Boolean               @default(true)
+  startsAt             DateTime              @default(now())
+  endsAt               DateTime
+  graceEndsAt          DateTime?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  subscriptionInvoices SubscriptionInvoice[]
+
+  @@index([companyId, isCurrent])
+  @@index([status, endsAt])
+}
+
+model SubscriptionInvoice {
+  id             String       @id @default(uuid())
+  companyId      String
+  company        Company      @relation(fields: [companyId], references: [id])
+  subscriptionId String
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id])
+  number         String       @unique
+  monthlyAmount  Decimal      @default(0) @db.Decimal(18,2)
+  durationMonths Int          @default(1)
+  discountPercent Int         @default(0)
+  amount         Decimal @db.Decimal(18,2)
+  currency       String
+  status         String       @default("UNPAID")
+  periodStart    DateTime
+  periodEnd      DateTime
+  issuedAt       DateTime     @default(now())
+  paidAt         DateTime?
+  payments       Payment[]
+
+  @@index([companyId])
+}
+
+model Payment {
+  id          String              @id @default(uuid())
+  companyId   String
+  company     Company             @relation(fields: [companyId], references: [id])
+  invoiceId   String
+  invoice     SubscriptionInvoice @relation(fields: [invoiceId], references: [id])
+  provider    String
+  externalRef String
+  amount      Decimal @db.Decimal(18,2)
+  currency    String
+  status      String
+  payload     String? @db.Text
+  createdAt   DateTime            @default(now())
+
+  @@unique([provider, externalRef])
+  @@index([companyId])
+}
+
+// ---------- Communication ----------
+
+model Notification {
+  id        String    @id @default(uuid())
+  companyId String?
+  company   Company?  @relation(fields: [companyId], references: [id])
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  type      String
+  title     String
+  body      String? @db.Text
+  refType   String?
+  refId     String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, readAt])
+  @@index([userId, createdAt])
+}
+
+model NotificationTemplate {
+  id        String  @id @default(uuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id])
+  type      String
+  title     String
+  body      String @db.Text
+
+  @@unique([companyId, type])
+}
+
+/// Envoi des e-mails de la plateforme, réglé par le Super Administrateur. Une seule ligne, d'identifiant « default ».
+/// Sans cette ligne, le serveur utilise les variables MAIL_* du fichier .env.
+model MailSettings {
+  id          String   @id @default("default")
+  host        String
+  port        Int
+  secure      Boolean  @default(true)
+  user        String
+  /// Mot de passe chiffré (AES-256-GCM, clé dérivée de JWT_SECRET). Jamais renvoyé par l'API.
+  passwordEnc String @db.Text
+  fromAddress String?
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+}
+
+/// Journal des e-mails envoyés : suivi des échecs, et clé anti-doublon pour les rappels (un seul rappel à J-7, par exemple).
+model EmailLog {
+  id        String   @id @default(uuid())
+  companyId String?
+  kind      String
+  recipient String
+  subject   String
+  status    String // SENT ou FAILED
+  error     String? @db.Text
+  dedupeKey String?  @unique
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([companyId, createdAt])
+}

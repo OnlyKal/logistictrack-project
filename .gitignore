@@ -1,0 +1,25 @@
+# Jamais dans le dépôt : secrets, bases de données, fichiers et sauvegardes.
+.env
+.env.*
+!.env.example
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+storage/
+backups/
+*.jks
+*.keystore
+key.properties
+*.pem
+*.p12
+
+# Dépendances et compilations
+node_modules/
+dist/
+
+# Système
+.DS_Store
+
+# Compilations Android générées
+mobile/android/build/
