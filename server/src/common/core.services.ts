@@ -7,7 +7,7 @@ import { Server } from 'socket.io'
 import { PrismaService, type Tx } from './prisma.service.js'
 import type { AuthContext, TenantContext } from './context.js'
 import nodemailer, { type Transporter } from 'nodemailer'
-import { brandName, loadBrand, mailLayout, mailText, readLogo, type Brand, type MailContent } from './pdf.js'
+import { brandName, loadBrand, mailLayout, mailText, platformLogo, readLogo, type Brand, type MailContent } from './pdf.js'
 import { decryptSecret, detectFileType, encryptSecret, hmac, safeEqual, secret, sha256 } from './util.js'
 
 @Injectable()
@@ -231,7 +231,8 @@ export class OutboundService implements OutboundChannel {
         : "L'envoi des e-mails n'est pas configuré : renseignez le compte d'envoi dans Mon compte.")
     }
     const brand: Brand = await loadBrand(this.prisma, companyId)
-    const logo = await readLogo(this.files as FileService, brand)
+    // Entreprise : son logo (ou son initiale) ; plateforme : le logo LT de LogisticTrack.
+    const logo = brand ? await readLogo(this.files as FileService, brand) : platformLogo()
     const logoCid = logo ? 'logo@logistictrack' : undefined
     const text = mailText(content, brand)
     const html = mailLayout(content, brand, logoCid)

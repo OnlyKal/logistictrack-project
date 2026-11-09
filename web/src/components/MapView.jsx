@@ -20,7 +20,7 @@ const labelNode = (text) => {
 /**
  * Carte OpenStreetMap. `markers` : { id, lat, lng, color, popup, moving }, `path` : liste [lat, lng],
  * `lines` : { id, points, color, weight, opacity, dashed, flow }. Les lignes sont mises à jour sans clignoter.
- * Un marqueur peut aussi avoir `html`, `size`, `heading`, `label` et `onClick`.
+ * Un marqueur peut aussi avoir `html`, `size`, `heading`, `label`, `onClick` et `z` (priorité d'affichage).
  * Sans `fitKey`, la vue suit les véhicules tant que l'utilisateur n'a pas déplacé la carte lui-même.
  * Avec `fitKey`, elle se recadre sur `fitPoints` quand la clé change, et `followPoint` garde le véhicule au centre.
  */
@@ -95,7 +95,7 @@ export function MapView({ markers = [], path, lines = [], tall, className = '', 
         }
         if (m.popup) existing.setPopupContent(m.popup)
       } else {
-        const marker = L.marker([m.lat, m.lng], { icon: icon(m), title: m.title, iconKey: iconHtml(m) }).addTo(map.current)
+        const marker = L.marker([m.lat, m.lng], { icon: icon(m), title: m.title, iconKey: iconHtml(m), zIndexOffset: m.z ?? 0 }).addTo(map.current)
         // Contenu textuel construit par l'appelant à partir d'un élément DOM : aucune injection HTML.
         if (m.popup) marker.bindPopup(m.popup)
         marker.on('click', () => clicks.current.get(m.id)?.())

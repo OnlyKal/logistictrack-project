@@ -5,7 +5,7 @@ import { api, query } from '../lib/api.js'
 import { useAuth } from '../lib/auth.jsx'
 import { useDebounced, useList } from '../lib/hooks.js'
 import { inputDate } from '../lib/format.js'
-import { Button, Card, Checkbox, DataTable, Empty, ErrorBox, Field, Input, Modal, PageHead, Pagination, SearchInput, Select, Textarea, useToast } from './ui.jsx'
+import { Alert, Button, Card, Checkbox, DataTable, Empty, ErrorBox, Field, Input, Modal, PageHead, Pagination, SearchInput, Select, Textarea, useToast } from './ui.jsx'
 
 /** Charge les options d'une liste liée (entrepôts, clients, etc.). */
 export function useOptions(path, toOption) {
@@ -142,27 +142,37 @@ export function FormModal({ title, fields, row, onSubmit, onClose, submitLabel =
   )
 }
 
-const NEW_PASSWORD_FIELD = [{ name: 'password', label: 'Nouveau mot de passe', type: 'password', required: true, minLength: 8, wide: true, hint: 'Communiquez-le à la personne. Ses sessions ouvertes seront fermées.' }]
+const NEW_PASSWORD_FIELD = [{ name: 'password', label: 'Nouveau mot de passe', type: 'password', required: true, minLength: 8, wide: true, hint: '8 caractères minimum. Communiquez-le à la personne : ses sessions ouvertes seront fermées et son compte débloqué.' }]
 
 /**
  * L'administrateur redonne l'accès à un membre qui a oublié son mot de passe. Avec allowLink, il peut
  * plutôt lui envoyer un lien par e-mail : personne d'autre que le membre ne connaît alors le mot de passe.
  */
-export function ResetPasswordModal({ endpoint, name, email, allowLink, onClose }) {
+export function ResetPasswordModal({ endpoint, name, email, allowLink, preferLink = true, onClose, onDone }) {
   const toast = useToast()
-  const [mode, setMode] = useState(allowLink && email ? 'link' : 'password')
+  const [mode, setMode] = useState(allowLink && email && preferLink ? 'link' : 'password')
+  const [notice, setNotice] = useState(null)
   const submit = async (values) => {
     if (mode === 'link') {
-      await api.post(endpoint, {})
+      try {
+        await api.post(endpoint, {})
+      } catch (err) {
+        // E-mail impossible (envoi non configuré, adresse refusée) : on bascule sur la saisie directe, avec la raison.
+        setNotice(/Saisissez/.test(err.message) ? err.message : `${err.message} Saisissez le nouveau mot de passe ci-dessous.`)
+        setMode('password')
+        return
+      }
       toast(`Lien envoyé à ${email}. Il est valable 24 heures.`)
     } else {
       await api.post(endpoint, values)
-      toast('Mot de passe réinitialisé. La personne est prévenue par e-mail.')
+      toast('Mot de passe modifié. Communiquez-le à la personne : ses autres sessions sont fermées.')
     }
+    onDone?.()
     onClose()
   }
   return (
     <FormModal key={mode} title={`Mot de passe : ${name}`} fields={mode === 'link' ? [] : NEW_PASSWORD_FIELD} onSubmit={submit} onClose={onClose} submitLabel={mode === 'link' ? 'Envoyer le lien' : 'Réinitialiser'}>
+      {notice && <Alert tone="warn">{notice}</Alert>}
       {allowLink && email && (
         <Field label="Méthode">
           <Select value={mode} onChange={(e) => setMode(e.target.value)} options={[{ value: 'link', label: `Envoyer un lien par e-mail à ${email} (recommandé)` }, { value: 'password', label: 'Fixer moi-même un nouveau mot de passe' }]} />

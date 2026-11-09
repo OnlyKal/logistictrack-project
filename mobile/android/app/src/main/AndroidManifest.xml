@@ -11,7 +11,7 @@
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.CAMERA"/>
     <application
-        android:label="LogisticTrack"
+        android:label="LOGISTIC TRACK"
         android:name="${applicationName}"
         android:allowBackup="false"
         android:fullBackupContent="false"

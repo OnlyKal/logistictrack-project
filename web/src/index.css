@@ -308,6 +308,32 @@ th.num { text-align: right; }
 .trip-tools { display: flex; gap: 6px; }
 .trip-tools .ops-action { min-width: 104px; }
 .trip-map .ops-stats { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
+.pin-trip { width: 26px; height: 26px; border-radius: 50%; font-size: 12px; font-weight: 700; }
+.pin-trip-a { background: var(--blue); }
+.pin-trip-b { background: var(--night); }
+.lg-trip { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--blue); color: #fff; font-size: 9.5px; font-weight: 700; font-style: normal; }
+.lg-trip-b { background: var(--night); }
+.lg-pin { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 5px; background: #475569; color: #fff; font-style: normal; }
+.lg-pin-end { background: var(--night); }
+.veh-replay .veh-arrow { transition: none; }
+.replay { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--r-s); background: var(--faint); }
+.replay-play { min-width: 150px; }
+.replay-speed, .replay-stop { min-width: 44px; font-variant-numeric: tabular-nums; }
+.replay-track { flex: 1; min-width: 0; display: grid; gap: 4px; }
+.replay-track input { width: 100%; height: 20px; margin: 0; background: none; cursor: pointer; -webkit-appearance: none; appearance: none; }
+.replay-track input::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: linear-gradient(to right, var(--blue) var(--p), var(--line) var(--p)); }
+.replay-track input::-moz-range-track { height: 4px; border-radius: 2px; background: var(--line); }
+.replay-track input::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--blue); }
+.replay-track input::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; margin-top: -6px; border-radius: 50%; background: #fff; border: 2px solid var(--blue); }
+.replay-track input::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: #fff; border: 2px solid var(--blue); }
+.replay-track input:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 4px; }
+.replay-times { display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.replay-times strong { display: inline-flex; align-items: center; gap: 5px; color: var(--night); font-weight: 600; text-align: center; }
+@media (max-width: 640px) {
+  .replay { flex-wrap: wrap; }
+  .replay-track { order: -1; flex-basis: 100%; }
+  .replay-play { flex: 1; }
+}
 @media (prefers-reduced-motion: reduce) {
   .line-flow, .veh-live .veh-pulse, .ops-dot.is-live { animation: none; }
 }
@@ -519,3 +545,4 @@ th.num { text-align: right; }
 @media (prefers-reduced-motion: reduce) {
   .tk-live.is-live i::after, .tk-step.is-current .tk-step-dot::after, .tk-spinner { animation: none; }
 }
+.logo-mark { display: block; flex: none; }

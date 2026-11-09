@@ -9,6 +9,7 @@ import { useFetch } from '../lib/hooks.js'
 import { useLive } from '../lib/socket.js'
 import { date, dateTime } from '../lib/format.js'
 import { Alert, Button, Select, useToast } from './ui.jsx'
+import { LogoMark } from './Logo.jsx'
 
 const COMPANY_NAV = [
   { items: [{ to: '/', label: 'Tableau de bord', icon: LayoutDashboard, end: true }] },
@@ -131,7 +132,7 @@ export function Layout() {
   return (
     <div className="shell">
       <aside className={`sidebar ${menu ? 'open' : ''}`} aria-label="Navigation principale">
-        <Link to="/" className="brand" style={{ textDecoration: 'none' }}><span className="brand-mark"><Truck size={15} strokeWidth={2.2} aria-hidden /></span>LogisticTrack</Link>
+        <Link to="/" className="brand" style={{ textDecoration: 'none' }}><LogoMark />LogisticTrack</Link>
         {nav.map((section, i) => {
           const items = section.items.filter((item) => !item.perm || can(...item.perm))
           if (!items.length) return null

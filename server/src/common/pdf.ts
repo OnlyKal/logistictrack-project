@@ -3,6 +3,7 @@
  * Un seul design partout ; seules changent les informations de l'entreprise concernée
  * (logo, nom, coordonnées, NIF et RCCM). Sans entreprise, c'est LogisticTrack qui signe.
  */
+import { readFileSync } from 'node:fs'
 import type PDFKit from 'pdfkit'
 import type { PrismaClient } from '@prisma/client'
 import type { FileService } from './core.services.js'
@@ -40,6 +41,31 @@ export const contactLine = (b: Brand) => (b ? [[b.address, b.city].filter(Boolea
 export const legalLine = (b: Brand) => (b ? [b.legalName && b.legalName !== b.tradeName ? b.legalName : null, b.taxId && `NIF ${b.taxId}`, b.rccm && `RCCM ${b.rccm}`].filter(Boolean).join('  •  ') : '')
 const initial = (b: Brand) => brandName(b).trim().charAt(0).toUpperCase() || 'L'
 
+/** Logo de LogisticTrack (« LT »), pour les documents de la plateforme : même dessin que le favicon et l'icône mobile. */
+let platformPng: Buffer | null | undefined
+export function platformLogo() {
+  if (platformPng === undefined) {
+    try {
+      platformPng = readFileSync(new URL('../../../assets/logo-lt.png', import.meta.url))
+    } catch {
+      platformPng = null
+    }
+  }
+  return platformPng ? { buffer: platformPng, mimeType: 'image/png' } : null
+}
+
+/** Logo LT dessiné en vectoriel dans un PDF (grille de 32, comme le favicon). */
+function drawPlatformMark(doc: PDFKit.PDFDocument, x: number, y: number, size: number) {
+  const k = size / 32
+  doc.save()
+  doc.roundedRect(x, y, size, size, 8 * k).fill(BLUE)
+  doc.lineWidth(3 * k).lineCap('round').lineJoin('round').strokeColor('#FFFFFF')
+  doc.moveTo(x + 10 * k, y + 8 * k).lineTo(x + 10 * k, y + 22 * k).lineTo(x + 22 * k, y + 22 * k).stroke()
+  doc.moveTo(x + 15 * k, y + 8 * k).lineTo(x + 24 * k, y + 8 * k).stroke()
+  doc.moveTo(x + 19.5 * k, y + 8 * k).lineTo(x + 19.5 * k, y + 17 * k).stroke()
+  doc.restore()
+}
+
 /** Logo de l'entreprise, seulement s'il est lisible partout (PNG ou JPEG). */
 export async function readLogo(files: FileService, b: Brand) {
   if (!b?.logoFileId) return null
@@ -69,8 +95,10 @@ export async function drawCompanyHeader(doc: PDFKit.PDFDocument, b: Brand, files
   if (logo) {
     doc.image(logo.buffer, left, top, { fit: [120, 48], valign: 'center' })
     markBottom = top + 48
-  } else {
+  } else if (b) {
     drawMonogram(doc, b, left, top, 40)
+  } else {
+    drawPlatformMark(doc, left, top, 40)
   }
   const x = left + 140
   const width = right - x
@@ -164,7 +192,10 @@ export function mailText(c: MailContent, b: Brand) {
  * logoCid : identifiant du logo joint au message (les images en data: sont bloquées par Gmail).
  */
 export function mailLayout(c: MailContent, b: Brand, logoCid?: string) {
-  const mark = logoCid
+  const mark = logoCid && !b
+    // Plateforme : le logo LT, puis le nom, comme dans l'application.
+    ? `<table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="width:34px;height:34px"><img src="cid:${logoCid}" alt="" width="34" height="34" style="display:block;border:0"></td><td style="padding-left:10px;font-weight:700;font-size:17px;color:${NAVY}">${PLATFORM_NAME}</td></tr></table>`
+    : logoCid
     ? `<img src="cid:${logoCid}" alt="${esc(brandName(b))}" style="display:block;max-height:44px;max-width:160px;border:0">`
     : `<table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="width:34px;height:34px;border-radius:9px;background:${BLUE};color:#ffffff;font-weight:700;font-size:17px;text-align:center;vertical-align:middle">${esc(initial(b))}</td><td style="padding-left:10px;font-weight:700;font-size:17px;color:${NAVY}">${esc(brandName(b))}</td></tr></table>`
   const contact = contactLine(b)

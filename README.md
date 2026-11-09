@@ -57,7 +57,9 @@ flutter pub get
 flutter run --dart-define=API_URL=http://<adresse-ip-du-serveur>:3000
 ```
 
-Sans `API_URL`, l'émulateur Android utilise `10.0.2.2:3000` et le simulateur iOS `localhost:3000`. Le HTTP en clair n'est autorisé qu'en debug.
+Sans `API_URL`, l'application utilise le serveur en ligne `https://www.logisticstraack.com` (`mobile/lib/core/config.dart`). En développement, `API_URL` permet de viser son ordinateur ; le HTTP en clair n'est autorisé qu'en debug.
+
+Application Android à installer sur les téléphones : `flutter build apk --release`, puis `build/app/outputs/flutter-apk/app-release.apk`.
 
 ## Tests
 
@@ -80,7 +82,7 @@ Les tests d'intégration mobile s'exécutent contre un serveur en marche, avec l
    ```
 3. **Redis** : définir `REDIS_URL` pour le WebSocket entre plusieurs instances et les tâches BullMQ.
 4. **Web** : `npm run build`, puis servir `web/dist` et relayer `/api` et `/socket.io` vers le serveur en HTTPS. Le serveur doit aussi connaître l'origine publique dans `WEB_ORIGINS`.
-5. **Mobile** : l'identifiant est `com.logistictrack.app` (Android et iOS). Signer les applications et compiler avec l'`API_URL` HTTPS de production.
+5. **Mobile** : l'identifiant est `com.logistictrack.app` (Android et iOS). L'adresse de production est déjà l'adresse par défaut ; signer les applications avant de les publier dans les stores.
 6. **Fichiers** : `STORAGE_DIR` doit pointer vers un volume persistant et sauvegardé.
 7. **E-mail et sauvegardes** : voir les deux sections ci-dessous. `WEB_PUBLIC_URL` doit être l'adresse publique du web, pour les liens envoyés par e-mail.
 
@@ -225,3 +227,8 @@ Décisions prises dans la conversation de référence :
 - Le backend Django et PostgreSQL du cahier initial est remplacé par Node.js, avec SQLite et MySQL. Il n'y a donc pas de Row Level Security : l'isolation est assurée par le serveur et couverte par les tests.
 - Le GPS est simplifié : pas de géorepérage, de détection d'anomalies, d'itinéraire intelligent ni d'ETA calculé.
 - Les fonctions jugées non essentielles sont écartées : chat, optimisation automatique des tournées (ordre de passage manuel), coûts logistiques, réclamations, API partenaires et webhooks sortants.
+
+
+
+d ~/Desktop/JUSTIN/PROJECTS/logisticTrack
+./deploy.sh

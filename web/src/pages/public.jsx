@@ -1,12 +1,12 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Truck } from 'lucide-react'
 import { api } from '../lib/api.js'
 import { useAuth } from '../lib/auth.jsx'
 import { Button, ErrorBox, Field, Input } from '../components/ui.jsx'
 import { LoginScene } from '../components/LoginScene.jsx'
+import { LogoMark } from '../components/Logo.jsx'
 
-const Brand = () => <div className="brand" style={{ padding: 0, fontSize: 17 }}><span className="brand-mark"><Truck size={15} strokeWidth={2.2} aria-hidden /></span>LogisticTrack</div>
+const Brand = () => <div className="brand" style={{ padding: 0, fontSize: 17 }}><LogoMark size={28} />LogisticTrack</div>
 
 export function Login() {
   const { login } = useAuth()

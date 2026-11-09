@@ -16,6 +16,7 @@ import { date, dateTime, distanceKm, km } from '../lib/format.js'
 import { MapView } from '../components/MapView.jsx'
 import { PIN_END, leftLine, trailLines, vehicleHtml } from '../components/TripMap.jsx'
 import { Button, ErrorBox, Input } from '../components/ui.jsx'
+import { LogoMark } from '../components/Logo.jsx'
 
 const STATUS_LOOK = {
   DRAFT: [Package, 'neutral'], PENDING: [Package, 'neutral'], VALIDATED: [Package, 'neutral'], PREPARING: [Package, 'blue'], READY: [Package, 'blue'],
@@ -229,7 +230,7 @@ export function PublicTracking() {
   if (!token) {
     return (
       <div className="tk-page tk-page-search">
-        <header className="tk-top"><Link to="/suivi-colis" className="tk-brand"><span className="brand-mark"><Truck size={15} strokeWidth={2.2} aria-hidden /></span>LogisticTrack</Link></header>
+        <header className="tk-top"><Link to="/suivi-colis" className="tk-brand"><LogoMark size={28} />LogisticTrack</Link></header>
         <div className="tk-card tk-search-card"><SearchForm /></div>
         <Link className="small" to="/connexion">Espace professionnel</Link>
       </div>
@@ -238,7 +239,7 @@ export function PublicTracking() {
   if (error && !data) {
     return (
       <div className="tk-page tk-page-search">
-        <header className="tk-top"><Link to="/suivi-colis" className="tk-brand"><span className="brand-mark"><Truck size={15} strokeWidth={2.2} aria-hidden /></span>LogisticTrack</Link></header>
+        <header className="tk-top"><Link to="/suivi-colis" className="tk-brand"><LogoMark size={28} />LogisticTrack</Link></header>
         <div className="tk-card tk-search-card"><div className="stack"><h1 className="page-title">Lien de suivi invalide</h1><p className="muted">Ce lien n’existe pas ou n’est plus valable. Vérifiez le lien reçu, ou recherchez votre colis par son numéro de suivi.</p><SearchForm compact /></div></div>
       </div>
     )

@@ -5,6 +5,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../theme.dart';
 import 'common.dart';
 import 'login_scene.dart';
+import 'logo.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -112,7 +113,7 @@ class _Brand extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(color: Palette.night, borderRadius: BorderRadius.circular(10)),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Container(width: 26, height: 26, decoration: BoxDecoration(color: Palette.blue, borderRadius: BorderRadius.circular(7)), child: const Icon(LucideIcons.truck, color: Colors.white, size: 15)),
+          const LogoMark(),
           const SizedBox(width: 10),
           const Text('LogisticTrack', style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w600, letterSpacing: -0.2)),
         ]),

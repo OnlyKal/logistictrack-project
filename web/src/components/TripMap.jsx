@@ -1,22 +1,29 @@
 import { useEffect, useMemo, useState } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { Activity, BatteryMedium, Clock, Flag, Gauge, LocateFixed, MapPin, Maximize, Navigation, Route, Satellite, Truck, Warehouse } from 'lucide-react'
+import { Activity, BatteryMedium, Clock, Flag, Gauge, History, LocateFixed, MapPin, Maximize, Navigation, Pause, Play, Route, Satellite, Square, Truck, Warehouse } from 'lucide-react'
 import { useLive } from '../lib/socket.js'
 import { ago, distanceKm, km } from '../lib/format.js'
 import { MapView } from './MapView.jsx'
 import { Empty } from './ui.jsx'
+import { useReplay } from './TripReplay.js'
 
 /** Éléments visuels communs au suivi en direct et à la fiche d'une livraison. */
 export const TRAIL_MAX_ACCURACY_M = 100
 export const LINE_LIVE = '#2563EB'
 export const LINE_STALE = '#94A3B8'
 const LINE_LEFT = '#14213D'
+/** Début et fin du trajet réellement effectué, d'après le GPS (différents de l'entrepôt et de la destination prévus). */
+const PIN_TRIP_START = '<div class="pin pin-trip pin-trip-a">A</div>'
+const PIN_TRIP_END = '<div class="pin pin-trip pin-trip-b">B</div>'
+const CLOSED = ['DELIVERED', 'PARTIALLY_DELIVERED', 'FAILED', 'RETURNED', 'CANCELLED']
+const clock = (v) => new Date(v).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+const clockSec = (v) => new Date(v).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 const svg = (element) => renderToStaticMarkup(element)
 export const PIN_START = `<div class="pin pin-start">${svg(<Warehouse size={15} strokeWidth={2} aria-hidden />)}</div>`
 export const PIN_END = `<div class="pin pin-end">${svg(<Flag size={15} strokeWidth={2} aria-hidden />)}</div>`
 const ARROW = svg(<Navigation size={15} strokeWidth={2.4} aria-hidden />)
 const TRUCK = svg(<Truck size={15} strokeWidth={2.2} aria-hidden />)
-export const vehicleHtml = ({ isLive, heading, selected }) => `<div class="veh ${isLive ? 'veh-live' : 'veh-lost'} ${selected ? 'veh-on' : ''}"><span class="veh-pulse"></span><span class="veh-core"><span class="veh-arrow">${heading == null ? TRUCK : ARROW}</span></span></div>`
+export const vehicleHtml = ({ isLive, heading, selected, replay }) => `<div class="veh ${isLive ? 'veh-live' : 'veh-lost'} ${selected ? 'veh-on' : ''} ${replay ? 'veh-replay' : ''}"><span class="veh-pulse"></span><span class="veh-core"><span class="veh-arrow">${heading == null ? TRUCK : ARROW}</span></span></div>`
 export const hasCoords = (place) => place?.latitude != null && place?.longitude != null
 export const reliable = (p) => p.accuracyM == null || p.accuracyM <= TRAIL_MAX_ACCURACY_M
 export const duration = (from, to = Date.now()) => {
@@ -47,6 +54,7 @@ export function TripMap({ delivery: d, positions, onReload }) {
   const [nonce, setNonce] = useState(0)
   const [, tick] = useState(0)
   const onRoad = d.status === 'IN_TRANSIT'
+  const closed = CLOSED.includes(d.status)
 
   useLive('position.update', (p) => {
     if (!onRoad || p.driverId !== d.driverId) return
@@ -68,6 +76,8 @@ export function TripMap({ delivery: d, positions, onReload }) {
     return [...measured, ...added]
   }, [positions, extra, onRoad])
   const points = useMemo(() => trail.map((p) => [p.latitude, p.longitude]), [trail])
+  const replay = useReplay(closed ? trail : [])
+  const playback = replay.active ? replay.current : null
 
   const start = hasCoords(d.warehouse) ? [d.warehouse.latitude, d.warehouse.longitude] : null
   const destination = hasCoords(d.deliveryPoint) ? [d.deliveryPoint.latitude, d.deliveryPoint.longitude] : null
@@ -80,13 +90,23 @@ export function TripMap({ delivery: d, positions, onReload }) {
   const seconds = trail.length > 1 ? (new Date(trail.at(-1).recordedAt) - new Date(trail[0].recordedAt)) / 1000 : 0
   const average = seconds >= 60 ? (done / seconds) * 3600 : null
 
+  // Trajet clôturé : les étiquettes A et B suffisent ; l'entrepôt et la destination gardent leur nom au survol.
+  const tripPins = closed && points.length > 1
   const markers = [
-    ...(start ? [{ id: 'start', lat: start[0], lng: start[1], html: PIN_START, size: 30, label: `Départ : ${d.warehouse.name}` }] : []),
-    ...(destination ? [{ id: 'end', lat: destination[0], lng: destination[1], html: PIN_END, size: 30, label: `Destination : ${d.deliveryPoint.name}` }] : []),
-    ...(here ? [{ id: 'vehicle', lat: here[0], lng: here[1], html: vehicleHtml({ isLive, heading: latest?.headingDeg, selected: true }), size: 44, moving: true, heading: latest?.headingDeg, label: onRoad ? d.driver?.fullName ?? null : 'Dernière position' }] : []),
+    ...(start ? [{ id: 'start', lat: start[0], lng: start[1], html: PIN_START, size: 30, title: `Départ : ${d.warehouse.name}`, label: tripPins ? null : `Départ : ${d.warehouse.name}` }] : []),
+    ...(destination ? [{ id: 'end', lat: destination[0], lng: destination[1], html: PIN_END, size: 30, title: `Destination : ${d.deliveryPoint.name}`, label: tripPins ? null : `Destination : ${d.deliveryPoint.name}` }] : []),
+    // Livraison clôturée : le point A (premier signal) et le point B (dernier signal) remplacent la « dernière position ».
+    ...(tripPins ? [
+      { id: 'trip-a', lat: points[0][0], lng: points[0][1], html: PIN_TRIP_START, size: 26, z: 500, label: `Début du trajet · ${clock(trail[0].recordedAt)}` },
+      { id: 'trip-b', lat: here[0], lng: here[1], html: PIN_TRIP_END, size: 26, z: 500, label: `Fin du trajet · ${clock(trail.at(-1).recordedAt)}` },
+    ] : []),
+    ...(playback ? [{ id: 'replay', lat: playback.point[0], lng: playback.point[1], html: vehicleHtml({ isLive: true, heading: playback.heading, selected: true, replay: true }), size: 44, z: 1000, heading: playback.heading, label: clock(playback.time) }]
+      : here && !tripPins ? [{ id: 'vehicle', lat: here[0], lng: here[1], html: vehicleHtml({ isLive, heading: latest?.headingDeg, selected: true }), size: 44, moving: true, heading: latest?.headingDeg, label: onRoad ? d.driver?.fullName ?? null : 'Dernière position' }] : []),
   ]
   const lines = [
-    ...trailLines({ id: 'trip', points, live: onRoad ? isLive : true }),
+    // Pendant la relecture, le trajet complet reste en gris et la partie déjà rejouée se dessine en bleu.
+    ...(playback ? [{ id: 'replay-full', points, color: LINE_STALE, weight: 4, opacity: 0.55 }, ...trailLines({ id: 'replay', points: playback.drawn, live: true })]
+      : trailLines({ id: 'trip', points, live: onRoad ? isLive : true })),
     ...(left !== null ? [leftLine({ id: 'trip', from: here, to: destination })] : []),
     // Avant le départ, le trajet prévu relie simplement les deux lieux.
     ...(!points.length && start && destination ? [leftLine({ id: 'plan', from: start, to: destination })] : []),
@@ -100,13 +120,15 @@ export function TripMap({ delivery: d, positions, onReload }) {
       <div className="trip-bar">
         <div className="ops-legend-items">
           <span><i className="lg-line" />Trajet réel</span>
-          <span><i className="lg-dash" />{points.length ? 'Reste à vol d\'oiseau' : 'Trajet prévu, à vol d\'oiseau'}</span>
+          {tripPins ? <><span><i className="lg-trip">A</i>Début du trajet</span><span><i className="lg-trip lg-trip-b">B</i>Fin du trajet</span><span><i className="lg-pin"><Warehouse size={10} aria-hidden /></i>Entrepôt</span><span><i className="lg-pin lg-pin-end"><Flag size={10} aria-hidden /></i>Destination</span></>
+            : <span><i className="lg-dash" />{points.length ? 'Reste à vol d\'oiseau' : 'Trajet prévu, à vol d\'oiseau'}</span>}
         </div>
         <div className="trip-tools">
           {onRoad && here && <button type="button" className={`ops-action ${follow ? 'is-on' : ''}`} aria-pressed={follow} onClick={() => setFollow(!follow)}><LocateFixed size={15} aria-hidden />{follow ? 'Suivi activé' : 'Suivre'}</button>}
           <button type="button" className="ops-action" onClick={() => { setFollow(false); setNonce((n) => n + 1) }}><Maximize size={15} aria-hidden />Recadrer</button>
         </div>
       </div>
+      {closed && replay.available && <ReplayBar replay={replay} trail={trail} />}
       {percent !== null && (
         <div className="ops-progress">
           <div><span>Progression estimée · reste {km(left)} à vol d'oiseau</span><strong>{percent} %</strong></div>
@@ -123,6 +145,27 @@ export function TripMap({ delivery: d, positions, onReload }) {
           <Stat icon={Satellite} label={onRoad ? 'Dernier signal' : 'Fin du trajet'} value={ago(latest?.recordedAt)} />
         </div>
       )}
+    </div>
+  )
+}
+
+/** Commandes de relecture : lecture, position dans le trajet, vitesse. */
+function ReplayBar({ replay, trail }) {
+  const c = replay.current
+  const start = trail[0].recordedAt
+  const end = trail.at(-1).recordedAt
+  return (
+    <div className="replay" role="group" aria-label="Relecture du trajet">
+      <button type="button" className="ops-action is-on replay-play" onClick={replay.toggle} aria-label={replay.playing ? 'Mettre en pause' : 'Rejouer le trajet'}>
+        {replay.playing ? <Pause size={15} aria-hidden /> : <Play size={15} aria-hidden />}{replay.playing ? 'Pause' : replay.active && replay.progress < 1 ? 'Reprendre' : 'Rejouer le trajet'}
+      </button>
+      <div className="replay-track">
+        <input type="range" min={0} max={1000} step={1} value={Math.round(replay.progress * 1000)} onChange={(e) => replay.seek(Number(e.target.value) / 1000)}
+          aria-label="Position dans le trajet" aria-valuetext={c ? clockSec(c.time) : clock(start)} style={{ '--p': `${replay.progress * 100}%` }} />
+        <div className="replay-times"><span>A · {clock(start)}</span><strong>{c ? `${clockSec(c.time)} · ${km(c.km)}${c.speedMs != null ? ` · ${Math.round(c.speedMs * 3.6)} km/h` : ''}` : <><History size={12} aria-hidden />Revoir le trajet effectué par le chauffeur</>}</strong><span>B · {clock(end)}</span></div>
+      </div>
+      <button type="button" className="ops-action replay-speed" onClick={replay.nextSpeed} aria-label={`Vitesse de relecture : ${replay.speed} fois`}>×{replay.speed}</button>
+      {replay.active && <button type="button" className="ops-action replay-stop" onClick={replay.stop} aria-label="Arrêter la relecture"><Square size={13} aria-hidden /></button>}
     </div>
   )
 }

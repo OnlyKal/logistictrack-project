@@ -85,3 +85,21 @@ code=$(curl -s -o /dev/null -w '%{http_code}' "$URL/")
 sante=$(curl -s "$URL/health" || true)
 [[ "$code" == "200" && "$sante" == *'"status":"ok"'* ]] || echec "le site ne répond pas correctement (code $code)."
 printf '\n\033[1;32mMise en ligne réussie : %s\033[0m\n' "$URL"
+
+etape "Envoi des mises à jour sur GitHub"
+# Le site est déjà en ligne : un échec ici ne l'annule pas, il suffit de relancer git push.
+cd "$ROOT"
+git add -A
+if git diff --cached --quiet; then
+  echo "- aucun changement à enregistrer"
+else
+  git commit -q -m "Mise en ligne du $(date '+%Y-%m-%d %H:%M')" \
+    -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+  echo "- changements enregistrés : $(git log -1 --format=%s)"
+fi
+if git push -q origin HEAD 2>/tmp/logistictrack-git.log; then
+  echo "- envoyé sur GitHub"
+else
+  cat /tmp/logistictrack-git.log
+  printf '\033[1;33mATTENTION : envoi sur GitHub impossible. Le site est à jour ; relancez « git push » plus tard.\033[0m\n'
+fi

@@ -4,7 +4,8 @@ import { api } from '../../lib/api.js'
 import { useAuth } from '../../lib/auth.jsx'
 import { useFetch, useList } from '../../lib/hooks.js'
 import { COMPANY_STATUS, INVOICE_STATUS, SUBSCRIPTION_STATUS, date, dateTime, durationLabel, money, num } from '../../lib/format.js'
-import { BackLink, CrudPage, FormModal } from '../../components/CrudPage.jsx'
+import { BackLink, CrudPage, FormModal, ResetPasswordModal } from '../../components/CrudPage.jsx'
+import { KeyRound } from 'lucide-react'
 import { EmailLog } from '../../components/EmailLog.jsx'
 import { Alert, Button, Card, Checkbox, Confirm, DataTable, Empty, ErrorBox, Field, Input, PageHead, Select, Status, useAction } from '../../components/ui.jsx'
 
@@ -60,6 +61,8 @@ export function CompanyDetail() {
   const { enterCompany } = useAuth()
   const { run, busy } = useAction()
   const [modal, setModal] = useState(null)
+  const [passwordFor, setPasswordFor] = useState(null)
+  const accounts = useFetch(`/companies/${id}/accounts`)
   if (error) return <ErrorBox error={error} />
   if (!c) return null
   const sub = c.subscriptions[0]
@@ -99,10 +102,24 @@ export function CompanyDetail() {
             ) : <Empty title="Aucun abonnement" />}
           </Card>
         </div>
+        <Card title="Comptes de l'entreprise">
+          <DataTable loading={accounts.loading} error={accounts.error} rows={accounts.data ?? []} columns={[
+            { label: 'Nom', render: (a) => <span className="strong">{a.fullName}</span> }, { label: 'E-mail ou téléphone', render: (a) => a.email ?? a.phone ?? '—' }, { label: 'Rôle', key: 'roleLabel' },
+            { label: 'Dernière connexion', render: (a) => (a.lastLoginAt ? dateTime(a.lastLoginAt) : 'Jamais') },
+            { label: 'État', render: (a) => (a.lockedUntil ? <Status map={{ locked: [`Bloqué jusqu'à ${new Date(a.lockedUntil).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`, 'red'] }} value="locked" /> : <Status map={{ true: ['Actif', 'green'], false: ['Désactivé', 'neutral'] }} value={String(a.isActive)} />) },
+            { label: '', render: (a) => <div className="actions"><Button icon={KeyRound} onClick={() => setPasswordFor(a)}>Mot de passe</Button></div> },
+          ]} empty={<Empty title="Aucun compte" />} />
+        </Card>
         <Card title="Factures">
           <InvoiceTable rows={c.subscriptionInvoices} />
         </Card>
       </div>
+      {passwordFor && (
+        <ResetPasswordModal
+          endpoint={`/companies/${id}/accounts/${passwordFor.id}/password`} name={`${passwordFor.fullName} (${passwordFor.roleLabel})`}
+          email={passwordFor.email} allowLink preferLink={false} onDone={accounts.reload} onClose={() => setPasswordFor(null)}
+        />
+      )}
       {modal === 'terms' && <FormModal wide title="Modifier l'abonnement" fields={termFields} row={sub} onClose={() => setModal(null)} onSubmit={async (v) => { await api.patch(`/companies/${id}/subscription`, v); setModal(null); reload() }}>
         <Alert tone="info">Une facture en attente est remplacée au nouveau montant. Les factures déjà payées ne changent pas.</Alert>
       </FormModal>}

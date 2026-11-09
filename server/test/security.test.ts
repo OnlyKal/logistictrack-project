@@ -139,6 +139,8 @@ describe('E-mails', () => {
     await root.post('/admin/mail/test')
     const platform = outbound.lastMails.get('root@test.local')!
     assert.ok(platform.html.includes('LogisticTrack') && !platform.html.includes('Bralima Test'))
+    assert.equal(platform.attachments, 1, 'e-mail de la plateforme : logo LT joint')
+    assert.ok(platform.html.includes('src="cid:logo@logistictrack"'))
     assert.equal((await root.post('/admin/mail/test', { companyId: A.companyId })).status, 200)
     assert.ok(outbound.lastMails.get('root@test.local')!.html.includes('Bralima Test'))
     assert.equal((await root.post('/admin/mail/test', { companyId: 'inconnue' })).status, 404)
@@ -238,5 +240,54 @@ describe('Messages d\'erreur d\'envoi', () => {
     assert.match(smtpErrorMessage(auth), /mot de passe d'application/)
     assert.match(smtpErrorMessage(Object.assign(new Error('connect ETIMEDOUT'), { code: 'ETIMEDOUT' })), /Impossible de joindre/)
     assert.match(smtpErrorMessage(new Error('bizarre')), /bizarre/)
+  })
+})
+
+describe('Le Super Administrateur redonne l\'accès à un compte', () => {
+  it('sans condition : administrateur principal bloqué, entreprise suspendue ; jamais par une entreprise', async () => {
+    const S = await makeCompany(app, root, 'SAPWD')
+    const admin = await prisma.user.findUniqueOrThrow({ where: { email: 'admin-sapwd@test.local' } })
+    for (let i = 0; i < 6; i++) await login('admin-SAPWD@test.local', 'oublié')
+    assert.equal((await login('admin-SAPWD@test.local', 'Password123')).status, 403, 'compte bloqué')
+    await root.post(`/companies/${S.companyId}/suspend`, {})
+
+    const accounts = (await root.get(`/companies/${S.companyId}/accounts`)).body.data as Array<{ id: string; role: string; lockedUntil: string | null }>
+    assert.equal(accounts[0].role, 'COMPANY_ADMIN', 'les administrateurs en premier')
+    assert.ok(accounts.find((a) => a.id === admin.id)?.lockedUntil, 'blocage visible')
+
+    const res = await root.post(`/companies/${S.companyId}/accounts/${admin.id}/password`, { password: 'NouveauClient2026' })
+    assert.equal(res.status, 200, JSON.stringify(res.body))
+    await root.post(`/companies/${S.companyId}/activate`, {})
+    assert.equal((await login('admin-SAPWD@test.local', 'NouveauClient2026')).status, 200, 'débloqué, nouveau mot de passe actif')
+    assert.equal((await S.admin.get('/warehouses')).status, 401, 'anciennes sessions fermées')
+    const audit = await prisma.auditLog.findFirst({ where: { companyId: S.companyId, action: 'admin.reset_password', entityId: admin.id } })
+    assert.ok(audit, 'inscrit au journal de l\'entreprise')
+
+    // Ni une entreprise, ni pour le compte d'une autre entreprise.
+    assert.equal((await A.admin.post(`/companies/${S.companyId}/accounts/${admin.id}/password`, { password: 'Pirate123456' })).status, 403)
+    assert.equal((await A.admin.get(`/companies/${S.companyId}/accounts`)).status, 403)
+    const other = await prisma.companyMembership.findFirstOrThrow({ where: { companyId: A.companyId } })
+    assert.equal((await root.post(`/companies/${S.companyId}/accounts/${other.userId}/password`, { password: 'Autre1234567' })).status, 404)
+    assert.equal((await root.post(`/companies/${S.companyId}/accounts/${admin.id}/password`, { password: 'court' })).status, 422, 'mot de passe trop court')
+  })
+
+  it("sans e-mail configuré : l'envoi d'un lien est refusé clairement, le mot de passe direct reste possible", async () => {
+    const S = await prisma.company.findFirstOrThrow({ where: { tradeName: 'Entreprise SAPWD' } })
+    const admin = await prisma.user.findUniqueOrThrow({ where: { email: 'admin-sapwd@test.local' } })
+    const saved = process.env.MAIL_TRANSPORT
+    process.env.MAIL_TRANSPORT = ''
+    const settings = await prisma.mailSettings.findUnique({ where: { id: 'default' } })
+    if (settings) await prisma.mailSettings.delete({ where: { id: 'default' } })
+    ;(app.get((await import('../src/common/core.services.js')).OutboundService) as unknown as { reset(): void }).reset()
+    try {
+      const link = await root.post(`/companies/${S.id}/accounts/${admin.id}/password`, {})
+      assert.equal(link.status, 502)
+      assert.match(link.body.message, /Saisissez plutôt un nouveau mot de passe/)
+      assert.equal((await root.post(`/companies/${S.id}/accounts/${admin.id}/password`, { password: 'SansEmail2026' })).status, 200)
+    } finally {
+      process.env.MAIL_TRANSPORT = saved
+      if (settings) await prisma.mailSettings.create({ data: settings })
+      ;(app.get((await import('../src/common/core.services.js')).OutboundService) as unknown as { reset(): void }).reset()
+    }
   })
 })

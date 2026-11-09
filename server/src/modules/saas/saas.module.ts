@@ -298,6 +298,48 @@ export class CompaniesController {
     return company
   }
 
+  /** Comptes de l'entreprise : le Super Administrateur voit qui peut se connecter, et qui est bloqué. */
+  @SuperAdminOnly() @Get(':id/accounts')
+  async accounts(@Param('id') id: string) {
+    const rows = await this.prisma.companyMembership.findMany({ where: { companyId: id }, include: { user: true }, orderBy: { createdAt: 'asc' } })
+    const order = (role: string) => (role === 'COMPANY_ADMIN' ? 0 : role === 'DRIVER' ? 2 : 1)
+    return rows
+      .sort((a, b) => order(a.role) - order(b.role))
+      .map((m) => ({
+        id: m.userId, fullName: m.user.fullName, email: m.user.email, phone: m.user.phone, role: m.role, roleLabel: ROLES[m.role]?.label ?? m.role,
+        isActive: m.isActive && m.user.isActive, lastLoginAt: m.user.lastLoginAt, lockedUntil: m.user.lockedUntil && m.user.lockedUntil > new Date() ? m.user.lockedUntil : null,
+      }))
+  }
+
+  /**
+   * Le Super Administrateur redonne l'accès à un compte de l'entreprise, sans condition :
+   * entreprise suspendue ou expirée, compte bloqué, administrateur principal compris.
+   * Avec un mot de passe : il est appliqué tout de suite, le compte est débloqué et ses sessions fermées.
+   * Sans mot de passe : un lien de réinitialisation part par e-mail.
+   */
+  @SuperAdminOnly() @Post(':id/accounts/:userId/password') @HttpCode(200) @Msg('Mot de passe modifié.')
+  async accountPassword(
+    @Ctx() ctx: AuthContext, @Param('id') id: string, @Param('userId') userId: string,
+    @Body(zod(z.object({ password: z.preprocess((v) => (v === '' || v === null ? undefined : v), z.string().min(8).max(200).optional()) }))) body: { password?: string },
+  ) {
+    const m = await this.prisma.companyMembership.findUnique({ where: { companyId_userId: { companyId: id, userId } }, include: { user: true } })
+    if (!m) throw new NotFoundException('Compte introuvable dans cette entreprise.')
+    const actor = { companyId: id, userId: ctx.userId, ip: ctx.ip }
+    if (!body.password) {
+      const r = await this.emails.resetLink(userId, { byAdmin: true })
+      if (!r.sent) throw new BadGatewayException(`${r.error ?? "Le lien n'a pas pu partir."} Saisissez plutôt un nouveau mot de passe.`)
+      await this.audit.log(actor, 'admin.reset_link', 'User', userId)
+      return { mode: 'link', sentTo: m.user.email }
+    }
+    await this.prisma.$transaction([
+      this.prisma.user.update({ where: { id: userId }, data: { passwordHash: await bcrypt.hash(body.password, 12), failedLogins: 0, lockedUntil: null } }),
+      this.prisma.userSession.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date() } }),
+    ])
+    await this.audit.log(actor, 'admin.reset_password', 'User', userId, { role: m.role })
+    this.emails.passwordChanged(userId, 'admin')
+    return { mode: 'password' }
+  }
+
   @SuperAdminOnly() @Patch(':id')
   async update(@Ctx() ctx: AuthContext, @Param('id') id: string, @Body(zod(companyPatch)) body: z.infer<typeof companyPatch>) {
     await this.audit.log({ companyId: id, userId: ctx.userId, ip: ctx.ip }, 'company.update', 'Company', id, Object.keys(body))
