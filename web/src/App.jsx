@@ -3,7 +3,8 @@ import { AuthProvider, useAuth } from './lib/auth.jsx'
 import { Layout } from './components/Layout.jsx'
 import { Empty, ToastProvider } from './components/ui.jsx'
 import { ForgotPassword, Login } from './pages/public.jsx'
-import { PublicTracking } from './pages/PublicTracking.jsx'
+import { PublicTracking, ShipmentTracking } from './pages/PublicTracking.jsx'
+import { ShipmentDetail, Shipments } from './pages/Shipments.jsx'
 import { Dashboard } from './pages/Dashboard.jsx'
 import { Agencies, CustomerDetail, Customers, ProductDetail, Products, PurchaseOrders, Suppliers, WarehouseDetail, Warehouses } from './pages/Catalog.jsx'
 import { Inventories, InventoryDetail, Stocks, Transfers } from './pages/Stock.jsx'
@@ -29,6 +30,7 @@ function AppRoutes() {
       <Route path="/mot-de-passe-oublie" element={guest(<ForgotPassword />)} />
       <Route path="/suivi-colis" element={<PublicTracking />} />
       <Route path="/suivi-colis/:token" element={<PublicTracking />} />
+      <Route path="/suivi-expedition/:token" element={<ShipmentTracking />} />
       <Route element={<Protected />}>
         <Route index element={<Dashboard />} />
         <Route path="entrepots" element={<Warehouses />} />
@@ -48,6 +50,8 @@ function AppRoutes() {
         <Route path="colis" element={<Packages />} />
         <Route path="livraisons" element={<Deliveries />} />
         <Route path="livraisons/:id" element={<DeliveryDetail />} />
+        <Route path="expeditions" element={<Shipments />} />
+        <Route path="expeditions/:id" element={<ShipmentDetail />} />
         <Route path="tournees" element={<RoutesPage />} />
         <Route path="tournees/:id" element={<RouteDetail />} />
         <Route path="suivi" element={<LiveTracking />} />

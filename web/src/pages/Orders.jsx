@@ -7,6 +7,7 @@ import { useDebounced, useFetch, useList } from '../lib/hooks.js'
 import { DELIVERY_STATUS, ORDER_STATUS, PACKAGE_STATUS, PACKAGING, PRIORITY, dateTime, date, money, num, options, qty } from '../lib/format.js'
 import { BackLink, useOptions } from '../components/CrudPage.jsx'
 import { DeliveryPointSelect } from '../components/DeliveryPointSelect.jsx'
+import { PickupFields, pickupBody } from './Distribution.jsx'
 import { LineItems, namedOption, newLine, productOption } from '../components/LineItems.jsx'
 import { Button, Card, Confirm, DataTable, Empty, ErrorBox, Field, Input, Modal, PageHead, Pagination, SearchInput, Select, Status, Textarea, useAction, useToast } from '../components/ui.jsx'
 
@@ -211,13 +212,14 @@ function PackageModal({ order, onClose, onDone }) {
 
 function DeliveryFromOrder({ order, packages, onClose, onDone }) {
   const [v, setV] = useState({ scheduledAt: '', priority: 'NORMAL', instructions: order.instructions ?? '' })
+  const [pickup, setPickup] = useState({ mode: 'HOME', pickupWarehouseId: '' })
   const [selected, setSelected] = useState(() => packages.map((p) => p.id))
   const [error, setError] = useState(null)
   const [key] = useState(() => api.newKey())
   const submit = async (e) => {
     e.preventDefault()
     try {
-      const d = await api.post('/deliveries', { orderId: order.id, packageIds: selected, scheduledAt: v.scheduledAt ? new Date(v.scheduledAt).toISOString() : undefined, priority: v.priority, instructions: v.instructions || undefined }, key)
+      const d = await api.post('/deliveries', { orderId: order.id, packageIds: selected, scheduledAt: v.scheduledAt ? new Date(v.scheduledAt).toISOString() : undefined, priority: v.priority, instructions: v.instructions || undefined, ...pickupBody(pickup) }, key)
       onDone(d)
     } catch (err) { setError(err) }
   }
@@ -231,6 +233,7 @@ function DeliveryFromOrder({ order, packages, onClose, onDone }) {
             <label key={p.id} className="checkbox"><input type="checkbox" checked={selected.includes(p.id)} onChange={(e) => setSelected(e.target.checked ? [...selected, p.id] : selected.filter((x) => x !== p.id))} /><span className="mono">{p.trackingNumber}</span></label>
           ))}
         </div>
+        <PickupFields value={pickup} onChange={setPickup} />
         <div className="form-grid">
           <Field label="Date prévue"><Input type="datetime-local" value={v.scheduledAt} onChange={(e) => setV({ ...v, scheduledAt: e.target.value })} /></Field>
           <Field label="Priorité"><Select value={v.priority} onChange={(e) => setV({ ...v, priority: e.target.value })} options={options(PRIORITY)} /></Field>

@@ -293,6 +293,7 @@ export const NOTIFICATION_DEFAULTS: Record<string, { title: string; body: string
   DRIVER_EN_ROUTE: { title: 'Chauffeur en route', body: 'La livraison {{number}} est en route.' },
   DRIVER_ARRIVED: { title: 'Chauffeur arrivé', body: 'Le chauffeur est arrivé pour la livraison {{number}}.' },
   DELIVERY_DONE: { title: 'Livraison terminée', body: 'La livraison {{number}} est terminée.' },
+  PICKUP_READY: { title: 'Disponible au retrait', body: 'La livraison {{number}} attend son client à {{warehouse}}.' },
   DELIVERY_FAILED: { title: 'Livraison échouée', body: 'La livraison {{number}} a échoué : {{reason}}.' },
   INCIDENT: { title: 'Incident signalé', body: 'Incident sur la livraison {{number}} : {{reason}}.' },
   STOCK_LOW: { title: 'Stock faible', body: 'Le stock de {{product}} est sous le seuil ({{quantity}}).' },

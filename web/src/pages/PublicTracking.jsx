@@ -10,6 +10,7 @@ import { io } from 'socket.io-client'
 import {
   Ban, Check, CircleAlert, Clock, Crosshair, Flag, LocateFixed, Mail, MapPin, Maximize, Navigation, Package, PackageCheck, PackageSearch,
   Phone, Radio, Route, ShieldCheck, Truck, Undo2, WifiOff, X,
+  Store,
 } from 'lucide-react'
 import { api } from '../lib/api.js'
 import { date, dateTime, distanceKm, km } from '../lib/format.js'
@@ -20,10 +21,10 @@ import { LogoMark } from '../components/Logo.jsx'
 
 const STATUS_LOOK = {
   DRAFT: [Package, 'neutral'], PENDING: [Package, 'neutral'], VALIDATED: [Package, 'neutral'], PREPARING: [Package, 'blue'], READY: [Package, 'blue'],
-  ASSIGNED: [Package, 'blue'], LOADED: [Truck, 'blue'], IN_TRANSIT: [Truck, 'blue'], ARRIVED: [MapPin, 'blue'], DELIVERED: [PackageCheck, 'green'],
+  ASSIGNED: [Package, 'blue'], LOADED: [Truck, 'blue'], IN_TRANSIT: [Truck, 'blue'], ARRIVED: [MapPin, 'blue'], AWAITING_PICKUP: [Store, 'blue'], DELIVERED: [PackageCheck, 'green'],
   PARTIALLY_DELIVERED: [PackageCheck, 'orange'], FAILED: [CircleAlert, 'red'], RETURNED: [Undo2, 'orange'], CANCELLED: [Ban, 'red'],
 }
-const STEP_ICON = { REGISTERED: Package, PREPARED: PackageCheck, IN_TRANSIT: Truck, ARRIVED: MapPin, DELIVERED: Check }
+const STEP_ICON = { REGISTERED: Package, PREPARED: PackageCheck, IN_TRANSIT: Truck, ARRIVED: MapPin, AVAILABLE: Store, DELIVERED: Check }
 
 /** Message de la carte quand la position n'est pas affichée : toujours la vraie raison. */
 const MAP_NOTICE = {
@@ -70,7 +71,7 @@ function SearchForm({ compact }) {
     setError(null)
     try {
       const res = await api.post('/public/tracking/search', { trackingNumber: number.trim() })
-      navigate(`/suivi-colis/${res.token}`)
+      navigate(res.kind === 'shipment' ? `/suivi-expedition/${res.token}` : `/suivi-colis/${res.token}`)
     } catch (err) {
       setError(err)
     } finally {
@@ -126,7 +127,7 @@ function LiveMap({ data, trail, fix, now, connected }) {
   const remaining = here && dest ? distanceKm(here, dest) : null
 
   const markers = [
-    ...(dest ? [{ id: 'dest', lat: dest[0], lng: dest[1], html: PIN_END, size: 30, label: 'Votre adresse' }] : []),
+    ...(dest ? [{ id: 'dest', lat: dest[0], lng: dest[1], html: PIN_END, size: 30, label: data.mode === 'PICKUP' ? 'Point de retrait' : 'Votre adresse' }] : []),
     ...(here ? [{ id: 'vehicle', lat: here[0], lng: here[1], html: vehicleHtml({ isLive, heading: fix.headingDeg, selected: true }), size: 44, moving: true, heading: fix.headingDeg, label: isLive ? 'Votre livreur' : 'Dernière position connue' }] : []),
   ]
   const lines = showVehicle ? [...trailLines({ id: 'trail', points: trail, live: isLive }), ...(dest ? [leftLine({ id: 'left', from: here, to: dest })] : [])] : []
@@ -280,9 +281,9 @@ export function PublicTracking() {
         <section className="tk-card tk-pad tk-details">
           <h2 className="tk-h2">Informations</h2>
           <dl className="tk-kv">
-            {data.destination?.label && <><dt><MapPin size={14} aria-hidden />Destination</dt><dd>{data.destination.label}</dd></>}
+            {data.destination?.label && <><dt><MapPin size={14} aria-hidden />{data.mode === 'PICKUP' ? 'Point de retrait' : 'Destination'}</dt><dd>{data.destination.label}{data.destination.phone && <div>{data.destination.phone}</div>}</dd></>}
             {data.scheduledAt && <><dt><Clock size={14} aria-hidden />Date prévue</dt><dd>{date(data.scheduledAt)}</dd></>}
-            {data.deliveredAt && <><dt><PackageCheck size={14} aria-hidden />Livré le</dt><dd>{dateTime(data.deliveredAt)}</dd></>}
+            {data.deliveredAt && <><dt><PackageCheck size={14} aria-hidden />{data.mode === 'PICKUP' ? 'Retiré le' : 'Livré le'}</dt><dd>{dateTime(data.deliveredAt)}</dd></>}
             <dt><Package size={14} aria-hidden />Colis</dt><dd>{data.packages > 1 ? `${data.packages} colis` : '1 colis'}</dd>
             <dt><Flag size={14} aria-hidden />Expéditeur</dt><dd>{data.company.name}</dd>
           </dl>
@@ -300,6 +301,92 @@ export function PublicTracking() {
 
       <footer className="tk-foot">
         <span><ShieldCheck size={14} aria-hidden />Lien personnel : ne le partagez qu’avec les personnes qui réceptionnent le colis.</span>
+        <span>Suivi fourni par <strong>LogisticTrack</strong></span>
+      </footer>
+    </div>
+  )
+}
+
+const SHIPMENT_LOOK = {
+  REGISTERED: [Package, 'blue'], IN_TRANSIT: [Truck, 'blue'], AT_WAREHOUSE: [MapPin, 'blue'], AVAILABLE: [Store, 'green'],
+  DELIVERED: [PackageCheck, 'green'], RETURNED: [Undo2, 'orange'], CANCELLED: [Ban, 'red'],
+}
+
+/** Suivi public d'une expédition (messagerie) : où est le colis, par où il est passé, où le retirer. */
+export function ShipmentTracking() {
+  const { token } = useParams()
+  const [data, setData] = useState(null)
+  const [error, setError] = useState(null)
+  const load = useCallback(async () => {
+    try {
+      setData(await api.get(`/public/shipments/${encodeURIComponent(token)}`))
+      setError(null)
+    } catch (err) {
+      setError(err)
+    }
+  }, [token])
+  useEffect(() => {
+    load()
+    // Les étapes changent au rythme des guichets : une mise à jour par minute suffit.
+    const timer = setInterval(load, 60_000)
+    const onFocus = () => load()
+    window.addEventListener('focus', onFocus)
+    return () => { clearInterval(timer); window.removeEventListener('focus', onFocus) }
+  }, [load])
+  useEffect(() => { document.title = data ? `${data.statusLabel} · Suivi ${data.trackingNumber}` : 'Suivi de colis' }, [data])
+
+  if (error && !data) {
+    return (
+      <div className="tk-page tk-page-search">
+        <header className="tk-top"><Link to="/suivi-colis" className="tk-brand"><LogoMark size={28} />LogisticTrack</Link></header>
+        <div className="tk-card tk-search-card"><div className="stack"><h1 className="page-title">Lien de suivi invalide</h1><p className="muted">Ce lien n’existe pas ou n’est plus valable. Recherchez votre colis par son numéro de suivi.</p><SearchForm compact /></div></div>
+      </div>
+    )
+  }
+  if (!data) return <div className="tk-page"><div className="tk-loading" role="status"><span className="tk-spinner" aria-hidden />Chargement du suivi…</div></div>
+  const [StatusIcon, tone] = SHIPMENT_LOOK[data.status] ?? [Package, 'neutral']
+  return (
+    <div className="tk-page">
+      <header className="tk-top">
+        <div className="tk-company"><CompanyMark company={data.company} /><div><div className="tk-company-name">{data.company.name}</div><div className="muted small">Suivi d’expédition</div></div></div>
+        <div className="tk-number"><span className="muted small">N° de suivi</span><span className="mono strong">{data.trackingNumber}</span></div>
+      </header>
+      <main className="tk-grid">
+        <section className={`tk-card tk-status tone-${tone}`} aria-live="polite">
+          <span className="tk-status-icon"><StatusIcon size={22} aria-hidden /></span>
+          <div className="tk-status-body">
+            <h1 className="tk-status-label">{data.statusLabel}</h1>
+            <p className="tk-status-hint">{data.statusHint}</p>
+            {data.feeDue && <p className="tk-chip">Frais d’envoi à régler au retrait : {data.feeDue}</p>}
+          </div>
+        </section>
+        <section className="tk-card tk-pad tk-steps-card">
+          <h2 className="tk-h2">Parcours du colis</h2>
+          <Steps steps={data.steps} />
+        </section>
+        <section className="tk-card tk-pad tk-details">
+          <h2 className="tk-h2">Informations</h2>
+          <dl className="tk-kv">
+            {data.location && <><dt><MapPin size={14} aria-hidden />Position</dt><dd>{data.location}</dd></>}
+            <dt><Flag size={14} aria-hidden />Départ</dt><dd>{data.origin}</dd>
+            <dt><Store size={14} aria-hidden />Retrait</dt><dd>{data.destination.label}{data.destination.address && <div>{data.destination.address}</div>}{data.destination.phone && <div>{data.destination.phone}</div>}</dd>
+            <dt><Clock size={14} aria-hidden />Déposé le</dt><dd>{dateTime(data.depositedAt)}</dd>
+            {data.pickedUpAt && <><dt><PackageCheck size={14} aria-hidden />{data.status === 'RETURNED' ? 'Rendu le' : 'Retiré le'}</dt><dd>{dateTime(data.pickedUpAt)}</dd></>}
+            <dt><Package size={14} aria-hidden />Colis</dt><dd>{data.parcels > 1 ? `${data.parcels} colis` : '1 colis'}</dd>
+          </dl>
+          {(data.company.phone || data.company.email) && (
+            <div className="tk-contact">
+              <div className="muted small">Une question sur votre colis ? Contactez {data.company.name}.</div>
+              <div className="tk-contact-actions">
+                {data.company.phone && <a className="tk-tool" href={`tel:${data.company.phone.replace(/\s/g, '')}`}><Phone size={15} aria-hidden />{data.company.phone}</a>}
+                {data.company.email && <a className="tk-tool" href={`mailto:${data.company.email}`}><Mail size={15} aria-hidden />Écrire</a>}
+              </div>
+            </div>
+          )}
+        </section>
+      </main>
+      <footer className="tk-foot">
+        <span><ShieldCheck size={14} aria-hidden />Aucun nom ni téléphone n’est affiché sur cette page.</span>
         <span>Suivi fourni par <strong>LogisticTrack</strong></span>
       </footer>
     </div>

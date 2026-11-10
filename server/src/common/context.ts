@@ -55,6 +55,16 @@ export function warehouseScope(ctx: TenantContext, field = 'warehouseId'): Recor
   return ctx.warehouseIds ? { [field]: { in: ctx.warehouseIds } } : {}
 }
 
+/**
+ * Périmètre d'une livraison : son entrepôt de départ, et pour un retrait, l'entrepôt de retrait
+ * et celui qui garde la marchandise. Une livraison à domicile n'a que son entrepôt de départ.
+ */
+export function deliveryWarehouseScope(ctx: TenantContext): Record<string, unknown> {
+  if (!ctx.warehouseIds) return {}
+  const ids = { in: ctx.warehouseIds }
+  return { OR: [{ warehouseId: ids }, { pickupWarehouseId: ids }, { heldAtWarehouseId: ids }] }
+}
+
 export const ALLOW_DRIVER_KEY = 'lt:allowdriver'
 /** La route est aussi ouverte au chauffeur : le service vérifie que la mission lui appartient. */
 export const AllowDriver = () => SetMetadata(ALLOW_DRIVER_KEY, true)

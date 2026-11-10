@@ -249,7 +249,7 @@ describe('Le Super Administrateur redonne l\'accès à un compte', () => {
     const admin = await prisma.user.findUniqueOrThrow({ where: { email: 'admin-sapwd@test.local' } })
     for (let i = 0; i < 6; i++) await login('admin-SAPWD@test.local', 'oublié')
     assert.equal((await login('admin-SAPWD@test.local', 'Password123')).status, 403, 'compte bloqué')
-    await root.post(`/companies/${S.companyId}/suspend`, {})
+    await root.post(`/companies/${S.companyId}/suspend`, { password: 'Password123' })
 
     const accounts = (await root.get(`/companies/${S.companyId}/accounts`)).body.data as Array<{ id: string; role: string; lockedUntil: string | null }>
     assert.equal(accounts[0].role, 'COMPANY_ADMIN', 'les administrateurs en premier')

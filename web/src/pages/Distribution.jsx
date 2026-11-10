@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { Battery, Compass, ExternalLink, FileDown, Gauge, GripVertical, Link2, MapPin, Plus, QrCode, RotateCcw, Satellite, Truck, Undo2, UserCheck, ArrowDown, ArrowUp } from 'lucide-react'
+import { Battery, Compass, ExternalLink, FileDown, Gauge, GripVertical, HandHelping, Link2, MapPin, PackageCheck, Plus, QrCode, RotateCcw, Satellite, Store, Truck, Undo2, UserCheck, ArrowDown, ArrowUp } from 'lucide-react'
 import { api, query } from '../lib/api.js'
 import { useAuth } from '../lib/auth.jsx'
 import { useDebounced, useFetch, useList } from '../lib/hooks.js'
 import { useLive } from '../lib/socket.js'
-import { DELIVERY_STATUS, DRIVER_STATUS, FAILURE_REASONS, PACKAGE_STATUS, PACKAGING, PRIORITY, PROOF_TYPES, ROUTE_STATUS, VEHICLE_STATUS, VEHICLE_TYPES, accuracyLabel, ago, date, dayEnd, dayStart, dateTime, num, options, qty } from '../lib/format.js'
+import { DELIVERY_MODE, DELIVERY_STATUS, DRIVER_STATUS, FAILURE_REASONS, PACKAGE_STATUS, PACKAGING, PRIORITY, PROOF_TYPES, ROUTE_STATUS, VEHICLE_STATUS, VEHICLE_TYPES, accuracyLabel, ago, date, dayEnd, dayStart, dateTime, num, options, qty } from '../lib/format.js'
 import { BackLink, CrudPage, FormModal, PeriodFilter, ResetPasswordModal, useOptions } from '../components/CrudPage.jsx'
 import { DeliveryPointSelect } from '../components/DeliveryPointSelect.jsx'
 import { LineItems, namedOption, newLine, productOption } from '../components/LineItems.jsx'
@@ -94,7 +94,27 @@ function FreePackageModal({ onClose, onDone }) {
   )
 }
 
-const deliveryOrigin = (d) => <>{d.deliveryPoint.name}<div className="muted small">{[d.deliveryPoint.commune, d.deliveryPoint.city].filter(Boolean).join(', ')}</div></>
+const deliveryOrigin = (d) => (d.mode === 'PICKUP'
+  ? <>Retrait : {d.pickupWarehouse?.name ?? '—'}<div className="muted small">{DELIVERY_MODE.PICKUP}</div></>
+  : <>{d.deliveryPoint.name}<div className="muted small">{[d.deliveryPoint.commune, d.deliveryPoint.city].filter(Boolean).join(', ')}</div></>)
+
+const warehouseOption = (w) => ({ value: w.id, label: w.agency ? `${w.name} — ${w.agency.name}` : w.name })
+
+/** Mode de remise : livraison à domicile (par défaut) ou retrait par le client dans un entrepôt de l'entreprise. */
+export function PickupFields({ value, onChange }) {
+  const warehouses = useOptions(value.mode === 'PICKUP' ? '/warehouses?limit=200' : null, warehouseOption)
+  return (
+    <div className="form-grid">
+      <Field label="Mode de remise"><Select value={value.mode} onChange={(e) => onChange({ mode: e.target.value, pickupWarehouseId: '' })} options={options(DELIVERY_MODE)} /></Field>
+      {value.mode === 'PICKUP' && (
+        <Field label="Entrepôt de retrait *" hint="Le client vient y chercher sa marchandise : celui de départ, ou un autre entrepôt de l'entreprise.">
+          <Select required value={value.pickupWarehouseId} onChange={(e) => onChange({ ...value, pickupWarehouseId: e.target.value })} placeholder="Sélectionner" options={warehouses} />
+        </Field>
+      )}
+    </div>
+  )
+}
+export const pickupBody = (v) => (v.mode === 'PICKUP' ? { mode: 'PICKUP', pickupWarehouseId: v.pickupWarehouseId } : {})
 
 export function Deliveries() {
   const { can } = useAuth()
@@ -141,12 +161,13 @@ function FreeDeliveryModal({ onClose, onDone }) {
   const customers = useOptions('/customers?limit=200', namedOption)
   const packages = useOptions('/packages?limit=200&unassigned=true', (p) => ({ value: p.id, label: `${p.trackingNumber} — ${p.items.map((i) => i.product.name).join(', ')}`, orderId: p.orderId }))
   const [v, setV] = useState({ customerId: '', deliveryPointId: '', packageId: '', scheduledAt: '', justification: '' })
+  const [pickup, setPickup] = useState({ mode: 'HOME', pickupWarehouseId: '' })
   const [error, setError] = useState(null)
   const [key] = useState(() => api.newKey())
   const submit = async (e) => {
     e.preventDefault()
     try {
-      onDone(await api.post('/deliveries', { customerId: v.customerId, deliveryPointId: v.deliveryPointId, packageIds: [v.packageId], scheduledAt: v.scheduledAt ? new Date(v.scheduledAt).toISOString() : undefined, justification: v.justification }, key))
+      onDone(await api.post('/deliveries', { customerId: v.customerId, deliveryPointId: v.deliveryPointId, packageIds: [v.packageId], scheduledAt: v.scheduledAt ? new Date(v.scheduledAt).toISOString() : undefined, justification: v.justification, ...pickupBody(pickup) }, key))
     } catch (err) { setError(err) }
   }
   return (
@@ -158,6 +179,7 @@ function FreeDeliveryModal({ onClose, onDone }) {
           <Field label="Client *"><Select required value={v.customerId} onChange={(e) => setV({ ...v, customerId: e.target.value, deliveryPointId: '' })} placeholder="Sélectionner" options={customers} /></Field>
           <DeliveryPointSelect customerId={v.customerId} value={v.deliveryPointId} onChange={(deliveryPointId) => setV((current) => ({ ...current, deliveryPointId }))} />
         </div>
+        <PickupFields value={pickup} onChange={setPickup} />
         <Field label="Date prévue"><Input type="datetime-local" value={v.scheduledAt} onChange={(e) => setV({ ...v, scheduledAt: e.target.value })} /></Field>
         <Field label="Justification *" hint="Obligatoire pour une livraison sans commande commerciale."><Textarea required value={v.justification} onChange={(e) => setV({ ...v, justification: e.target.value })} /></Field>
       </Modal>
@@ -201,7 +223,77 @@ function AssignModal({ delivery, onClose, onDone, reschedule }) {
   )
 }
 
-const CONFIRMABLE = ['ARRIVED']
+const CONFIRMABLE = ['ARRIVED', 'AWAITING_PICKUP']
+const BEFORE_LOADING = ['DRAFT', 'PENDING', 'VALIDATED', 'PREPARING', 'READY', 'ASSIGNED']
+
+/** Remise au guichet de l'entrepôt de retrait : réceptionnaire et preuves exigées par l'entreprise. */
+function HandoverModal({ delivery: d, onClose, onDone }) {
+  const [v, setV] = useState({ recipientName: '', recipientPhone: '' })
+  const [files, setFiles] = useState({ SIGNATURE: null, PHOTO_GOODS: null })
+  const [error, setError] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const toast = useToast()
+  const submit = async (e) => {
+    e.preventDefault()
+    setBusy(true)
+    setError(null)
+    try {
+      for (const [type, file] of Object.entries(files)) {
+        if (file) await api.upload(`/deliveries/${d.id}/proofs`, file, { type })
+      }
+      setFiles({ SIGNATURE: null, PHOTO_GOODS: null })
+      await api.post(`/deliveries/${d.id}/pickup/handover`, { recipientName: v.recipientName, recipientPhone: v.recipientPhone || undefined })
+      toast('Marchandise remise au client.')
+      onDone()
+    } catch (err) {
+      setError(err)
+      setBusy(false)
+    }
+  }
+  return (
+    <form onSubmit={submit}>
+      <Modal title="Remettre la marchandise au client" onClose={onClose} footer={<><Button onClick={onClose}>Annuler</Button><Button type="submit" variant="primary" loading={busy}>Confirmer la remise</Button></>}>
+        <ErrorBox error={error} />
+        <p className="muted small">Vérifiez l'identité de la personne et le numéro de suivi. Les preuves exigées par votre entreprise (signature, photo) sont contrôlées à la confirmation.</p>
+        <div className="form-grid">
+          <Field label="Nom du réceptionnaire *"><Input required minLength={2} value={v.recipientName} onChange={(e) => setV({ ...v, recipientName: e.target.value })} /></Field>
+          <Field label="Téléphone"><Input type="tel" value={v.recipientPhone} onChange={(e) => setV({ ...v, recipientPhone: e.target.value })} /></Field>
+          <Field label="Signature (photo ou scan)"><Input type="file" accept="image/*,application/pdf" onChange={(e) => setFiles({ ...files, SIGNATURE: e.target.files?.[0] ?? null })} /></Field>
+          <Field label="Photo de la marchandise"><Input type="file" accept="image/*" onChange={(e) => setFiles({ ...files, PHOTO_GOODS: e.target.files?.[0] ?? null })} /></Field>
+        </div>
+      </Modal>
+    </form>
+  )
+}
+
+/** Mode de remise et entrepôt de retrait ; une marchandise déjà disponible peut partir vers un autre entrepôt. */
+function PickupModal({ delivery: d, onClose, onDone }) {
+  const waiting = d.status === 'AWAITING_PICKUP'
+  const [v, setV] = useState({ mode: waiting ? 'PICKUP' : d.mode, pickupWarehouseId: waiting ? '' : d.pickupWarehouse?.id ?? '' })
+  const [note, setNote] = useState('')
+  const warehouses = useOptions(waiting ? '/warehouses?limit=200' : null, warehouseOption)
+  const { run, busy } = useAction()
+  const submit = async (e) => {
+    e.preventDefault()
+    const r = await run(() => api.post(`/deliveries/${d.id}/pickup`, { ...v, pickupWarehouseId: v.mode === 'PICKUP' ? v.pickupWarehouseId : undefined, note: note || undefined }), 'Mode de remise enregistré.')
+    if (r.ok) onDone()
+  }
+  return (
+    <form onSubmit={submit}>
+      <Modal title={waiting ? 'Envoyer vers un autre entrepôt de retrait' : 'Mode de remise'} onClose={onClose} footer={<><Button onClick={onClose}>Annuler</Button><Button type="submit" variant="primary" loading={busy}>Enregistrer</Button></>}>
+        <div className="stack">
+          {waiting ? (
+            <>
+              <Alert tone="warn">Le client veut sa marchandise dans un autre entrepôt de l'entreprise. Elle redevient prête : affectez ensuite un chauffeur pour l'y acheminer. Le stock n'est pas sorti une seconde fois.</Alert>
+              <Field label="Nouvel entrepôt de retrait *"><Select required value={v.pickupWarehouseId} onChange={(e) => setV({ ...v, pickupWarehouseId: e.target.value })} placeholder="Sélectionner" options={warehouses.filter((w) => w.value !== d.pickupWarehouse?.id)} /></Field>
+            </>
+          ) : <PickupFields value={v} onChange={setV} />}
+          <Field label="Note"><Textarea value={note} onChange={(e) => setNote(e.target.value)} /></Field>
+        </div>
+      </Modal>
+    </form>
+  )
+}
 
 /** Le bureau arrête une mission en cours : motif obligatoire, chauffeur prévenu, suivi arrêté. */
 function RecallModal({ delivery: d, onClose, onDone }) {
@@ -246,12 +338,21 @@ export function DeliveryDetail() {
     if (r.ok) window.open(api.fileUrl(r.result.url), '_blank', 'noopener')
   }
   const issueStock = can('delivery.resolve')
+  // Retrait en entrepôt : sans trajet si la marchandise est déjà dans l'entrepôt de retrait.
+  const pickup = d.mode === 'PICKUP'
+  const onSite = pickup && d.pickupWarehouse?.id === (d.heldAtWarehouseId ?? d.warehouse.id)
+  const counter = can('delivery.load', 'delivery.resolve')
   return (
     <>
-      <PageHead back={<BackLink to="/livraisons" label="Livraisons" />} title={d.number} sub={`${d.customer.name} · ${d.deliveryPoint.name}`} actions={<>
+      <PageHead back={<BackLink to="/livraisons" label="Livraisons" />} title={d.number} sub={`${d.customer.name} · ${pickup ? `Retrait : ${d.pickupWarehouse?.name ?? '—'}` : d.deliveryPoint.name}`} actions={<>
         <Status map={DELIVERY_STATUS} value={s} />
         {['DRAFT', 'PENDING'].includes(s) && can('delivery.validate') && <Button variant="primary" loading={busy} onClick={() => act('validate', 'Livraison validée.')}>Valider</Button>}
-        {['VALIDATED', 'PREPARING', 'READY', 'ASSIGNED'].includes(s) && can('delivery.assign') && <Button variant={s === 'ASSIGNED' ? undefined : 'primary'} icon={UserCheck} onClick={() => setModal('assign')}>{s === 'ASSIGNED' ? 'Changer' : 'Affecter'}</Button>}
+        {onSite && s === 'READY' && counter && <Button variant="primary" icon={Store} loading={busy} onClick={() => act('pickup/available', 'Marchandise disponible au retrait.', {})}>Mettre à disposition du client</Button>}
+        {pickup && ['IN_TRANSIT', 'ARRIVED'].includes(s) && counter && <Button variant="primary" icon={PackageCheck} loading={busy} onClick={() => act('pickup/receive', 'Marchandise réceptionnée : disponible au retrait.', {})}>Réceptionner à l'entrepôt</Button>}
+        {s === 'AWAITING_PICKUP' && counter && <Button variant="primary" icon={HandHelping} onClick={() => setModal('handover')}>Remettre au client</Button>}
+        {s === 'AWAITING_PICKUP' && issueStock && <Button icon={Undo2} onClick={() => setModal('return')}>Client non venu : retour en stock</Button>}
+        {(BEFORE_LOADING.includes(s) || s === 'AWAITING_PICKUP') && can('delivery.create', 'delivery.resolve') && <Button icon={MapPin} onClick={() => setModal('pickup')}>{s === 'AWAITING_PICKUP' ? 'Autre entrepôt de retrait' : 'Mode de remise'}</Button>}
+        {!onSite && ['VALIDATED', 'PREPARING', 'READY', 'ASSIGNED'].includes(s) && can('delivery.assign') && <Button variant={s === 'ASSIGNED' ? undefined : 'primary'} icon={UserCheck} onClick={() => setModal('assign')}>{s === 'ASSIGNED' ? 'Changer' : 'Affecter'}</Button>}
         {s === 'ASSIGNED' && can('delivery.load') && <Button variant="primary" loading={busy} onClick={() => act('load', 'Chargement confirmé, stock sorti.', {})}>Confirmer le chargement</Button>}
         {s === 'LOADED' && can('delivery.resolve') && <Button icon={Undo2} onClick={() => setModal('return')}>Retour</Button>}
         {s === 'FAILED' && issueStock && <><Button variant="primary" icon={RotateCcw} onClick={() => setModal('reschedule')}>Reprogrammer</Button><Button icon={Undo2} onClick={() => setModal('return')}>Enregistrer le retour</Button></>}
@@ -297,9 +398,11 @@ export function DeliveryDetail() {
           <Card title="Détails" pad>
             <dl className="kv">
               <dt>Client</dt><dd><Link to={`/clients/${d.customer.id}`}>{d.customer.name}</Link></dd>
-              <dt>Adresse</dt><dd>{[d.deliveryPoint.address, d.deliveryPoint.commune, d.deliveryPoint.city].filter(Boolean).join(', ')}</dd>
+              <dt>Remise</dt><dd>{DELIVERY_MODE[d.mode] ?? d.mode}</dd>
+              {pickup && <><dt>Entrepôt de retrait</dt><dd>{d.pickupWarehouse?.name ?? '—'}{d.pickupWarehouse?.address && <div className="muted small">{d.pickupWarehouse.address}</div>}</dd></>}
+              <dt>{pickup ? 'Adresse du client' : 'Adresse'}</dt><dd>{[d.deliveryPoint.address, d.deliveryPoint.commune, d.deliveryPoint.city].filter(Boolean).join(', ')}</dd>
               <dt>Contact</dt><dd>{[d.deliveryPoint.contactName, d.deliveryPoint.phone].filter(Boolean).join(' / ') || '—'}</dd>
-              <dt>Entrepôt</dt><dd>{d.warehouse.name}</dd>
+              <dt>{pickup ? 'Entrepôt de départ' : 'Entrepôt'}</dt><dd>{d.warehouse.name}</dd>
               <dt>Commande</dt><dd>{d.order ? <Link to={`/commandes/${d.order.id}`}>{d.order.number}</Link> : <span title={d.justification}>Sans commande</span>}</dd>
               <dt>Chauffeur</dt><dd>{d.driver?.fullName ?? '—'}{d.driverResponse === 'ACCEPTED' && <span className="muted small"> · a accepté</span>}</dd>
               <dt>Véhicule</dt><dd>{d.vehicle?.registration ?? '—'}</dd>
@@ -341,6 +444,8 @@ export function DeliveryDetail() {
         { name: 'condition', label: 'État constaté', type: 'select', required: true, default: 'GOOD', options: options({ GOOD: 'Bon : réintégré au stock disponible', DAMAGED: 'Endommagé : stock non disponible', QUARANTINE: 'À contrôler : stock bloqué' }) },
         { name: 'note', label: 'Note', type: 'textarea', wide: true },
       ]} onSubmit={async (v) => { await api.post(`/deliveries/${id}/return`, v); setModal(null); reload() }} />}
+      {modal === 'handover' && <HandoverModal delivery={d} onClose={() => setModal(null)} onDone={() => { setModal(null); reload() }} />}
+      {modal === 'pickup' && <PickupModal delivery={d} onClose={() => setModal(null)} onDone={() => { setModal(null); reload() }} />}
       {modal === 'recall' && <RecallModal delivery={d} onClose={() => setModal(null)} onDone={() => { setModal(null); reload(); track.reload() }} />}
       {modal === 'cancel' && <Confirm danger title="Annuler la livraison" message="Les colis redeviendront disponibles pour une autre livraison." confirmLabel="Annuler la livraison" busy={busy} onClose={() => setModal(null)} onConfirm={async () => { await act('cancel', 'Livraison annulée.', {}); setModal(null) }} />}
     </>

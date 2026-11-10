@@ -235,9 +235,13 @@ export class PublicTrackingController {
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @Post('search') @HttpCode(200)
   async search(@Body(zod(z.object({ trackingNumber: z.string().trim().min(6).max(30) }))) body: { trackingNumber: string }) {
-    const pack = await this.prisma.package.findUnique({ where: { trackingNumber: body.trackingNumber.toUpperCase() }, select: { trackingToken: true } })
-    if (!pack) throw new NotFoundException('Aucun colis ne correspond à ce numéro de suivi.')
-    return { token: pack.trackingToken }
+    const number = body.trackingNumber.toUpperCase()
+    const pack = await this.prisma.package.findUnique({ where: { trackingNumber: number }, select: { trackingToken: true } })
+    if (pack) return { token: pack.trackingToken }
+    // Même champ de recherche pour les expéditions (messagerie), qui ont leur propre page de suivi.
+    const shipment = await this.prisma.shipment.findUnique({ where: { trackingNumber: number }, select: { trackingToken: true } })
+    if (shipment) return { token: shipment.trackingToken, kind: 'shipment' }
+    throw new NotFoundException('Aucun colis ne correspond à ce numéro de suivi.')
   }
 
   /** Sans clé : l'état et les étapes. Avec la clé du lien reçu par e-mail : la carte en direct pendant le trajet. */

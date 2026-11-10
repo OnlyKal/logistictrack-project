@@ -17,7 +17,14 @@ class Mission {
   String? get instructions => raw['instructions'] as String?;
   DateTime? get scheduledAt => DateTime.tryParse(raw['scheduledAt']?.toString() ?? '')?.toLocal();
   Map<String, dynamic> get customer => raw['customer'] as Map<String, dynamic>;
-  Map<String, dynamic> get point => raw['deliveryPoint'] as Map<String, dynamic>;
+  /// Retrait en entrepôt : le chauffeur dépose la marchandise à l'entrepôt de retrait, où le client vient la chercher.
+  bool get isPickup => raw['mode'] == 'PICKUP' && raw['pickupWarehouse'] is Map;
+  /// Destination du chauffeur : l'adresse du client, ou l'entrepôt de retrait.
+  Map<String, dynamic> get point {
+    if (!isPickup) return raw['deliveryPoint'] as Map<String, dynamic>;
+    final w = raw['pickupWarehouse'] as Map<String, dynamic>;
+    return {'name': "Entrepôt de retrait : ${w['name']}", 'address': w['address'], 'phone': w['phone'], 'latitude': w['latitude'], 'longitude': w['longitude']};
+  }
   Map<String, dynamic>? get vehicle => raw['vehicle'] as Map<String, dynamic>?;
   Map<String, dynamic>? get route => raw['route'] as Map<String, dynamic>?;
   List<Map<String, dynamic>> get items => (raw['items'] as List).cast<Map<String, dynamic>>();
@@ -46,7 +53,7 @@ class ProofRules {
 }
 
 const missionStatusLabels = {
-  'ASSIGNED': 'À charger', 'LOADED': 'Chargée', 'IN_TRANSIT': 'En route', 'ARRIVED': 'Arrivée', 'DELIVERED': 'Livrée',
+  'ASSIGNED': 'À charger', 'LOADED': 'Chargée', 'IN_TRANSIT': 'En route', 'ARRIVED': 'Arrivée', 'AWAITING_PICKUP': "Déposée à l'entrepôt", 'DELIVERED': 'Livrée',
   'PARTIALLY_DELIVERED': 'Livrée partiellement', 'FAILED': 'Échec', 'RETURNED': 'Retournée', 'CANCELLED': 'Annulée',
 };
 

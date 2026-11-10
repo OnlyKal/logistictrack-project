@@ -9,6 +9,7 @@
  * Jamais : le nom, le téléphone ou la photo du chauffeur, l'immatriculation, les autres clients,
  * l'entrepôt de départ, les quantités, les prix ni les numéros internes.
  * Si le chauffeur livre d'abord d'autres clients, leur trajet et leur adresse restent invisibles.
+ * Retrait en entrepôt : la destination est l'entrepôt de retrait, que le client doit connaître.
  */
 import { Injectable, NotFoundException } from '@nestjs/common'
 import { DELIVERY_STATUS_LABELS, GPS_LIVE_SECONDS, type DeliveryStatus } from '../../common/constants.js'
@@ -32,6 +33,28 @@ const STEPS = [
 
 const STEP_OF: Record<string, number> = {
   DRAFT: 0, PENDING: 0, VALIDATED: 0, PREPARING: 0, READY: 1, ASSIGNED: 1, LOADED: 1, IN_TRANSIT: 2, ARRIVED: 3, DELIVERED: 4, PARTIALLY_DELIVERED: 4,
+}
+
+/** Retrait en entrepôt : le trajet n'existe que si la marchandise part d'un autre entrepôt. */
+const PICKUP_STEPS = [
+  { key: 'REGISTERED', label: 'Commande enregistrée', events: ['CREATED'] },
+  { key: 'PREPARED', label: 'Colis préparé', events: ['READY', 'LOADED'] },
+  { key: 'IN_TRANSIT', label: 'En route vers le point de retrait', events: ['STARTED', 'ARRIVED'] },
+  { key: 'AVAILABLE', label: 'Disponible au retrait', events: ['AVAILABLE'] },
+  { key: 'DELIVERED', label: 'Retiré', events: ['DELIVERED', 'PARTIALLY_DELIVERED'] },
+] as const
+const PICKUP_STEP_KEY: Record<string, string> = {
+  DRAFT: 'REGISTERED', PENDING: 'REGISTERED', VALIDATED: 'REGISTERED', PREPARING: 'REGISTERED', READY: 'PREPARED', ASSIGNED: 'PREPARED', LOADED: 'PREPARED',
+  IN_TRANSIT: 'IN_TRANSIT', ARRIVED: 'IN_TRANSIT', AWAITING_PICKUP: 'AVAILABLE', DELIVERED: 'DELIVERED', PARTIALLY_DELIVERED: 'DELIVERED',
+}
+const PICKUP_STATUS: Record<string, { label: string; hint: string }> = {
+  LOADED: { label: 'Chargé', hint: 'Votre colis est chargé et partira bientôt vers le point de retrait.' },
+  IN_TRANSIT: { label: 'En route', hint: 'Votre colis est en route vers le point de retrait.' },
+  ARRIVED: { label: 'Arrivé au point de retrait', hint: 'Votre colis vient d’arriver au point de retrait. Il sera disponible très bientôt.' },
+  AWAITING_PICKUP: { label: 'Disponible au retrait', hint: 'Votre colis vous attend au point de retrait. Présentez-vous avec votre numéro de suivi.' },
+  DELIVERED: { label: 'Retiré', hint: 'Votre colis a été retiré.' },
+  PARTIALLY_DELIVERED: { label: 'Retiré en partie', hint: "Votre colis a été retiré en partie. L'expéditeur vous contactera pour le reste." },
+  FAILED: { label: 'Acheminement interrompu', hint: "Votre colis n'a pas pu être acheminé jusqu'au point de retrait. L'expéditeur va vous recontacter." },
 }
 
 /** Ce que le client comprend, sans jargon interne. */
@@ -93,6 +116,8 @@ export class PublicTrackingService {
         delivery: {
           select: {
             id: true, status: true, scheduledAt: true, deliveredAt: true, driverId: true, _count: { select: { packages: true } },
+            mode: true, warehouseId: true, pickupWarehouseId: true, heldAtWarehouseId: true,
+            pickupWarehouse: { select: { name: true, address: true, phone: true, latitude: true, longitude: true } },
             deliveryPoint: { select: { name: true, commune: true, city: true, latitude: true, longitude: true } },
             events: { where: { isPublic: true }, orderBy: { occurredAt: 'asc' }, select: { type: true, label: true, occurredAt: true } },
           },
@@ -101,11 +126,16 @@ export class PublicTrackingService {
     })
     const d = pack.delivery
     const status = d?.status ?? 'DRAFT'
-    const pub = PUBLIC_STATUS[status] ?? { label: DELIVERY_STATUS_LABELS[status as DeliveryStatus] ?? status, hint: '' }
+    const pickup = d?.mode === 'PICKUP'
+    // Sans trajet (retrait là où se trouve la marchandise), l'étape « en route » n'est pas montrée.
+    const travels = pickup && (d!.pickupWarehouseId !== d!.warehouseId || d!.events.some((e) => e.type === 'STARTED'))
+    const STEP_LIST: ReadonlyArray<{ key: string; label: string; events: readonly string[] }> = pickup ? PICKUP_STEPS.filter((s) => s.key !== 'IN_TRANSIT' || travels) : STEPS
+    const pub = (pickup ? PICKUP_STATUS[status] : undefined) ?? PUBLIC_STATUS[status] ?? { label: DELIVERY_STATUS_LABELS[status as DeliveryStatus] ?? status, hint: '' }
     const events = d?.events ?? []
     const failed = ['FAILED', 'RETURNED', 'CANCELLED'].includes(status)
-    const reached = failed ? Math.max(...events.map((e) => STEPS.findIndex((s) => (s.events as readonly string[]).includes(e.type))), 0) : STEP_OF[status] ?? 0
-    const steps: Array<{ key: string; label: string; at: Date | null; state: string }> = STEPS.map((s, i) => {
+    const stepOf = pickup ? Math.max(STEP_LIST.findIndex((s) => s.key === PICKUP_STEP_KEY[status]), 0) : STEP_OF[status] ?? 0
+    const reached = failed ? Math.max(...events.map((e) => STEP_LIST.findIndex((s) => (s.events as readonly string[]).includes(e.type))), 0) : stepOf
+    const steps: Array<{ key: string; label: string; at: Date | null; state: string }> = STEP_LIST.map((s, i) => {
       const at = [...events].reverse().find((e) => (s.events as readonly string[]).includes(e.type))?.occurredAt ?? null
       // Échec : les étapes atteintes restent validées, une dernière étape rouge explique la suite.
       const state = failed ? (i <= reached ? 'done' : 'todo') : i < reached || (i === reached && TERMINAL.includes(status)) ? 'done' : i === reached ? 'current' : 'todo'
@@ -113,8 +143,10 @@ export class PublicTrackingService {
     })
     if (failed) steps.splice(reached + 1, steps.length, { key: status, label: pub.label, at: events.at(-1)?.occurredAt ?? null, state: 'failed' })
 
+    const site = pickup ? d?.pickupWarehouse : null
     const point = d?.deliveryPoint
-    const hasCoords = point?.latitude != null && point?.longitude != null
+    const hasCoords = site ? site.latitude != null && site.longitude != null : point?.latitude != null && point?.longitude != null
+    const target: [number, number] | null = !hasCoords ? null : site ? [Number(site.latitude), Number(site.longitude)] : [Number(point!.latitude), Number(point!.longitude)]
     let logoUrl: string | null = null
     if (pack.company.logoFileId) {
       const signed = await this.files.signedUrl({ companyId: pack.company.id } as never, pack.company.logoFileId, 3600).catch(() => null)
@@ -125,8 +157,16 @@ export class PublicTrackingService {
       company: { name: pack.company.tradeName, phone: pack.company.phone, email: pack.company.email, logoUrl },
       status, statusLabel: pub.label, statusHint: pub.hint,
       scheduledAt: d?.scheduledAt ?? null, deliveredAt: d?.deliveredAt ?? null, packages: d?._count.packages ?? 1,
+      mode: pickup ? 'PICKUP' : 'HOME',
+      // Retrait : l'entrepôt, son adresse et son téléphone, que le client doit connaître pour venir.
+      destination: site ? {
+        label: [site.name, site.address].filter(Boolean).join(', '),
+        phone: site.phone ?? null,
+        latitude: target?.[0] ?? null,
+        longitude: target?.[1] ?? null,
+      }
       // Sans le lien reçu par e-mail : la commune seulement. Avec : le point exact, qui est celui du client.
-      destination: point ? {
+      : point ? {
         label: ref.live ? [point.name, point.commune, point.city].filter(Boolean).join(', ') : [point.commune, point.city].filter(Boolean).join(', ') || null,
         latitude: ref.live && hasCoords ? Number(point.latitude) : null,
         longitude: ref.live && hasCoords ? Number(point.longitude) : null,
@@ -134,7 +174,7 @@ export class PublicTrackingService {
       steps,
       events: events.map((e) => ({ label: e.label, occurredAt: e.occurredAt })),
       live: ref.live,
-      tracking: ref.live && d ? await this.liveTrack(d.id, status, d.driverId, hasCoords ? [Number(point!.latitude), Number(point!.longitude)] : null) : null,
+      tracking: ref.live && d ? await this.liveTrack(d.id, status, d.driverId, target) : null,
       liveSeconds: GPS_LIVE_SECONDS,
     }
   }
@@ -164,7 +204,7 @@ export class PublicTrackingService {
   private async liveTrack(deliveryId: string, status: string, driverId: string | null, destination: [number, number] | null) {
     const base = { position: null, trail: [] as Array<[number, number]>, stopsBefore: null as number | null, remainingKm: null as number | null, since: null as Date | null }
     if (status === 'ARRIVED') return { ...base, state: 'ARRIVED' as LiveState }
-    if (TERMINAL.includes(status)) return { ...base, state: 'ENDED' as LiveState }
+    if (TERMINAL.includes(status) || status === 'AWAITING_PICKUP') return { ...base, state: 'ENDED' as LiveState }
     if (status !== 'IN_TRANSIT' || !driverId) return { ...base, state: 'NOT_STARTED' as LiveState }
     const stopsBefore = await this.stopsBefore(deliveryId)
     if (await this.atOtherStop(deliveryId, driverId)) return { ...base, stopsBefore, state: 'OTHER_STOP' as LiveState }

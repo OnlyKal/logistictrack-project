@@ -49,6 +49,7 @@ class StatusChip extends StatelessWidget {
       'LOADED' => (Palette.tealSoft, Palette.teal, LucideIcons.package),
       'IN_TRANSIT' => (Palette.blue, Colors.white, LucideIcons.truck),
       'ARRIVED' => (Palette.limeSoft, Palette.lime, LucideIcons.mapPinCheck),
+      'AWAITING_PICKUP' => (Palette.tealSoft, Palette.teal, LucideIcons.store),
       'DELIVERED' => (Palette.greenSoft, Palette.green, LucideIcons.circleCheck),
       'PARTIALLY_DELIVERED' => (Palette.orangeSoft, Palette.orange, LucideIcons.triangleAlert),
       'FAILED' => (Palette.redSoft, Palette.red, LucideIcons.circleX),

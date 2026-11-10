@@ -110,8 +110,24 @@ describe('Authentification et cycle de vie des entreprises', () => {
     assert.equal((await c.get('/auth/me')).status, 401)
   })
 
+  it('suspendre ou fermer exige le mot de passe du Super Administrateur', async () => {
+    const tmp = (await root.post('/companies', { tradeName: 'Éphémère', email: 'eph@test.local', adminName: 'Eph', adminEmail: 'eph-admin@test.local', adminPassword: 'Password123', monthlyAmount: 10 })).body.data
+    const none = await root.post(`/companies/${tmp.id}/suspend`, {})
+    assert.equal(none.status, 422, 'mot de passe obligatoire')
+    const bad = await root.post(`/companies/${tmp.id}/suspend`, { password: 'mauvais' })
+    assert.equal(bad.status, 403)
+    assert.equal(bad.body.code, 'BAD_PASSWORD')
+    assert.equal((await root.get(`/companies/${tmp.id}`)).body.data.status, 'active', 'rien ne change')
+    assert.equal((await root.post(`/companies/${tmp.id}/close`, { password: 'mauvais' })).status, 403)
+    assert.equal((await root.get('/auth/me')).status, 200, 'un mot de passe faux ne ferme pas la session du Super Administrateur')
+    const closed = await root.post(`/companies/${tmp.id}/close`, { password: 'Password123', reason: 'Test' })
+    assert.equal(closed.status, 200)
+    assert.equal(closed.body.data.status, 'closed')
+    assert.equal((await root.post(`/companies/${tmp.id}/suspend`, { password: 'Password123' })).status, 404, 'une entreprise fermée ne se suspend plus')
+  })
+
   it('une entreprise suspendue perd l\'accès, une réactivation le rétablit', async () => {
-    assert.equal((await root.post(`/companies/${B.companyId}/suspend`, {})).status, 200)
+    assert.equal((await root.post(`/companies/${B.companyId}/suspend`, { password: 'Password123' })).status, 200)
     assert.equal((await B.admin.get('/warehouses')).status, 403)
     assert.equal((await root.post(`/companies/${B.companyId}/activate`, {})).status, 200)
     assert.equal((await B.admin.get('/warehouses')).status, 200)
@@ -154,7 +170,7 @@ describe('Authentification et cycle de vie des entreprises', () => {
     assert.equal((await sa.get('/companies')).status, 200, 'il garde ses droits de plateforme')
 
     // Même une entreprise suspendue et expirée reste sous son contrôle.
-    await root.post(`/companies/${A.companyId}/suspend`, {})
+    await root.post(`/companies/${A.companyId}/suspend`, { password: 'Password123' })
     const sub = await prisma.subscription.findFirstOrThrow({ where: { companyId: A.companyId, isCurrent: true } })
     await prisma.subscription.update({ where: { id: sub.id }, data: { status: 'EXPIRED' } })
     assert.equal((await A.admin.post('/warehouses', { name: 'Bloqué', code: 'BLQ' })).status, 403)

@@ -6,23 +6,29 @@ import QRCode from 'qrcode'
 import { z } from 'zod'
 import { AuditService, FileService, NotificationService, RealtimeService, SequenceService } from '../../common/core.services.js'
 import { LimitsService } from '../../common/limits.service.js'
-import { assertWarehouse, warehouseScope, type TenantContext } from '../../common/context.js'
+import { assertWarehouse, deliveryWarehouseScope, warehouseScope, type TenantContext } from '../../common/context.js'
 import { paged, parsePeriod, type PageQuery } from '../../common/http.js'
 import { PrismaService, type Tx } from '../../common/prisma.service.js'
 import { DELIVERY_STATUS_LABELS, DELIVERY_TRANSITIONS, type DeliveryStatus, RECALLED } from '../../common/constants.js'
 import { D, opaqueToken, readableCode } from '../../common/util.js'
 import { StockService, type Allocation } from '../stock/stock.service.js'
-import type { assignSchema, confirmSchema, deliverySchema, failSchema, incidentSchema, opSchema, packageSchema, partialSchema, proofSchema, rescheduleSchema, returnSchema, scanSchema, recallSchema } from './deliveries.schemas.js'
+import type { assignSchema, confirmSchema, deliverySchema, failSchema, incidentSchema, opSchema, packageSchema, partialSchema, pickupSchema, proofSchema, rescheduleSchema, returnSchema, scanSchema, recallSchema } from './deliveries.schemas.js'
 
 const ACTIVE_ON_VEHICLE: DeliveryStatus[] = ['ASSIGNED', 'LOADED', 'IN_TRANSIT', 'ARRIVED']
 /** Le chauffeur reste occupé tant qu'il a l'une de ces missions, mais il n'est suivi que sur la route. */
 const ON_MISSION: DeliveryStatus[] = ['LOADED', 'IN_TRANSIT', 'ARRIVED']
 const STEP_ORDER: DeliveryStatus[] = ['ASSIGNED', 'LOADED', 'IN_TRANSIT', 'ARRIVED', 'PARTIALLY_DELIVERED', 'DELIVERED']
+/** Étapes avant le chargement : le mode de remise et l'entrepôt de retrait y restent modifiables. */
+const BEFORE_LOADING: DeliveryStatus[] = ['DRAFT', 'PENDING', 'VALIDATED', 'PREPARING', 'READY', 'ASSIGNED']
+
+/** Entrepôt où se trouve la marchandise : l'entrepôt de départ, sauf si elle a été réceptionnée ailleurs pour un retrait. */
+const location = (d: { warehouseId: string; heldAtWarehouseId: string | null }) => d.heldAtWarehouseId ?? d.warehouseId
 
 export const DELIVERY_INCLUDE = {
   customer: { select: { id: true, name: true, code: true, phone: true } },
   deliveryPoint: true,
   warehouse: { select: { id: true, name: true, address: true, latitude: true, longitude: true } },
+  pickupWarehouse: { select: { id: true, name: true, address: true, phone: true, latitude: true, longitude: true } },
   driver: { select: { id: true, fullName: true, phone: true } },
   vehicle: { select: { id: true, registration: true, type: true } },
   order: { select: { id: true, number: true } },
@@ -130,11 +136,13 @@ export class DeliveriesService {
   async scan(ctx: TenantContext, body: z.infer<typeof scanSchema>) {
     const pack = await this.prisma.package.findFirst({
       where: { qrToken: body.token, companyId: ctx.companyId },
-      include: { items: { include: { product: { select: { name: true, baseUnit: true } } } }, delivery: { select: { id: true, number: true, status: true, driverId: true } } },
+      include: { items: { include: { product: { select: { name: true, baseUnit: true } } } }, delivery: { select: { id: true, number: true, status: true, driverId: true, pickupWarehouseId: true, heldAtWarehouseId: true } } },
     })
     if (!pack) throw new NotFoundException('QR Code inconnu pour cette entreprise.')
     if (ctx.driverId && pack.delivery?.driverId !== ctx.driverId) throw new ForbiddenException('Ce colis ne fait pas partie de vos missions.')
-    if (!ctx.driverId) assertWarehouse(ctx, pack.warehouseId)
+    // Retrait : l'entrepôt de retrait scanne aussi les colis qu'il reçoit et remet au client.
+    const sites = [pack.warehouseId, pack.delivery?.pickupWarehouseId, pack.delivery?.heldAtWarehouseId]
+    if (!ctx.driverId && !sites.some((w) => w && ctx.warehouseIds?.includes(w))) assertWarehouse(ctx, pack.warehouseId)
     if (body.action === 'VIEW') return pack
     if (!pack.deliveryId || !pack.delivery) throw new ConflictException("Ce colis n'est rattaché à aucune livraison.")
     if (body.deliveryId && body.deliveryId !== pack.deliveryId) throw new ConflictException('Ce colis appartient à une autre livraison.')
@@ -158,7 +166,7 @@ export class DeliveriesService {
   /** Un chauffeur ne voit que ses missions ; les autres profils restent dans leur périmètre d'entrepôts. */
   private scope(ctx: TenantContext): Prisma.DeliveryWhereInput {
     if (ctx.driverId && ctx.role === 'DRIVER') return { companyId: ctx.companyId, driverId: ctx.driverId }
-    return { companyId: ctx.companyId, ...warehouseScope(ctx) }
+    return { companyId: ctx.companyId, ...deliveryWarehouseScope(ctx) }
   }
 
   private async getOwned(ctx: TenantContext, id: string, tx?: Tx) {
@@ -184,21 +192,27 @@ export class DeliveriesService {
     const statuses = p.status?.split(',')
     const period = parsePeriod(p)
     const where: Prisma.DeliveryWhereInput = {
-      ...this.scope(ctx),
-      // La date d'une mission est sa date prévue, ou sa création si elle n'en a pas.
-      ...(period ? { AND: [{ OR: [{ scheduledAt: period }, { scheduledAt: null, createdAt: period }] }] } : {}),
-      ...(statuses ? { status: { in: statuses } } : {}),
-      ...(p.driverId ? { driverId: String(p.driverId) } : {}),
-      ...(p.warehouseId ? { warehouseId: String(p.warehouseId) } : {}),
-      ...(p.customerId ? { customerId: String(p.customerId) } : {}),
-      ...(p.q ? { OR: [{ number: { contains: p.q } }, { customer: { name: { contains: p.q } } }] } : {}),
+      AND: [
+        this.scope(ctx),
+        // La date d'une mission est sa date prévue, ou sa création si elle n'en a pas.
+        ...(period ? [{ OR: [{ scheduledAt: period }, { scheduledAt: null, createdAt: period }] }] : []),
+        {
+          ...(statuses ? { status: { in: statuses } } : {}),
+          ...(p.driverId ? { driverId: String(p.driverId) } : {}),
+          ...(p.warehouseId ? { warehouseId: String(p.warehouseId) } : {}),
+          ...(p.customerId ? { customerId: String(p.customerId) } : {}),
+          ...(p.mode ? { mode: String(p.mode) } : {}),
+          ...(p.pickupWarehouseId ? { pickupWarehouseId: String(p.pickupWarehouseId) } : {}),
+        },
+        ...(p.q ? [{ OR: [{ number: { contains: p.q } }, { customer: { name: { contains: p.q } } }] }] : []),
+      ],
     }
     const [items, total] = await Promise.all([
       this.prisma.delivery.findMany({
         where, skip: p.skip, take: p.take, orderBy: [{ scheduledAt: 'desc' }, { createdAt: 'desc' }],
         include: {
           customer: { select: { name: true } }, deliveryPoint: { select: { name: true, commune: true, city: true } },
-          driver: { select: { fullName: true } }, vehicle: { select: { registration: true } }, warehouse: { select: { name: true } },
+          driver: { select: { fullName: true } }, vehicle: { select: { registration: true } }, warehouse: { select: { name: true } }, pickupWarehouse: { select: { name: true } },
           _count: { select: { packages: true } },
         },
       }),
@@ -210,7 +224,8 @@ export class DeliveriesService {
   /** Vue mobile : prochaines missions du chauffeur connecté. */
   async missions(ctx: TenantContext, scope: string) {
     const active: DeliveryStatus[] = ['ASSIGNED', 'LOADED', 'IN_TRANSIT', 'ARRIVED']
-    const finished: DeliveryStatus[] = ['DELIVERED', 'PARTIALLY_DELIVERED', 'FAILED', 'RETURNED']
+    // Retrait : une fois la marchandise déposée à l'entrepôt, la mission du chauffeur est terminée.
+    const finished: DeliveryStatus[] = ['DELIVERED', 'PARTIALLY_DELIVERED', 'FAILED', 'RETURNED', 'AWAITING_PICKUP']
     const items = await this.prisma.delivery.findMany({
       where: { companyId: ctx.companyId, driverId: ctx.driverId!, status: { in: scope === 'history' ? finished : active } },
       orderBy: scope === 'history' ? { updatedAt: 'desc' } : [{ scheduledAt: 'asc' }, { createdAt: 'asc' }],
@@ -292,6 +307,8 @@ export class DeliveriesService {
   }
 
   async create(ctx: TenantContext, body: z.infer<typeof deliverySchema>) {
+    if (body.mode === 'PICKUP' && !body.pickupWarehouseId) throw new UnprocessableEntityException("Choisissez l'entrepôt où le client retirera sa marchandise.")
+    if (body.mode === 'HOME' && body.pickupWarehouseId) throw new UnprocessableEntityException("Un entrepôt de retrait ne s'indique que pour un retrait en entrepôt.")
     await this.limits.assertCanAdd(ctx.companyId, 'deliveries')
     const delivery = await this.prisma.atomic(async (tx) => {
       const packages = await tx.package.findMany({ where: { id: { in: body.packageIds }, companyId: ctx.companyId }, include: { items: true } })
@@ -319,6 +336,8 @@ export class DeliveriesService {
       assertWarehouse(ctx, warehouseId)
       const point = await tx.deliveryPoint.findFirst({ where: { id: deliveryPointId, customerId, companyId: ctx.companyId } })
       if (!point) throw new NotFoundException("Ce point de livraison n'appartient pas à ce client.")
+      // Retrait : n'importe quel entrepôt de l'entreprise, même hors du périmètre de l'utilisateur.
+      const pickupWarehouseId = body.mode === 'PICKUP' ? (await this.companyWarehouse(tx, ctx, body.pickupWarehouseId!)).id : null
 
       // Agrégation des contenus des colis en lignes de livraison.
       const lines = new Map<string, { productId: string; orderItemId: string | null; quantity: Prisma.Decimal }>()
@@ -331,7 +350,7 @@ export class DeliveriesService {
       const number = await this.seq.next(tx, ctx.companyId, 'delivery', 'LVR')
       const created = await tx.delivery.create({
         data: {
-          companyId: ctx.companyId, number, orderId, customerId, deliveryPointId, warehouseId,
+          companyId: ctx.companyId, number, orderId, customerId, deliveryPointId, warehouseId, mode: body.mode, pickupWarehouseId,
           scheduledAt: body.scheduledAt, priority: body.priority, instructions: body.instructions, justification: body.justification,
           createdById: ctx.userId, items: { create: [...lines.values()] },
           history: { create: { status: 'DRAFT', userId: ctx.userId } },
@@ -420,6 +439,7 @@ export class DeliveriesService {
   /** Affectation dans une transaction existante, réutilisée par les tournées. */
   async assignTx(tx: Tx, ctx: TenantContext, id: string, body: z.infer<typeof assignSchema>) {
     const d = await this.getOwned(ctx, id, tx)
+    this.assertNeedsDriver(d)
     await this.checkAssignment(tx, ctx.companyId, id, body.driverId, body.vehicleId)
     const data = { driverId: body.driverId, vehicleId: body.vehicleId, driverResponse: null }
     if (d.status === 'ASSIGNED') {
@@ -488,18 +508,7 @@ export class DeliveriesService {
         throw new UnprocessableEntityException({ message: 'Tous les colis doivent être scannés avant le chargement.', code: 'SCAN_REQUIRED' })
       }
       await this.move(tx, ctx, d, 'LOADED')
-      if (!d.stockIssued) {
-        for (const item of d.items) {
-          const where = item.orderItemId ? { orderItemId: item.orderItemId } : { deliveryItemId: item.id }
-          const allocations = await this.stock.consume(tx, ctx.companyId, where, item.quantity, {
-            direction: 'OUT', reason: 'DELIVERY', refType: 'Delivery', refId: id, userId: ctx.userId,
-          })
-          await tx.deliveryItem.update({ where: { id: item.id }, data: { allocations: JSON.stringify(allocations) } })
-          if (item.orderItemId) await tx.orderItem.update({ where: { id: item.orderItemId }, data: { quantityShipped: { increment: item.quantity } } })
-        }
-        await tx.delivery.update({ where: { id }, data: { stockIssued: true } })
-        if (d.orderId) await this.syncOrder(tx, ctx, d.orderId)
-      }
+      await this.issueStock(tx, ctx, d)
       await tx.package.updateMany({ where: { deliveryId: id }, data: { status: 'LOADED' } })
       await this.event(tx, ctx, id, 'LOADED', 'Chargement confirmé', true, op)
       return this.getOwned(ctx, id, tx)
@@ -541,13 +550,14 @@ export class DeliveriesService {
       await this.assertSingleTrip(tx, ctx.companyId, d.driverId, id)
       await this.move(tx, ctx, d, 'IN_TRANSIT')
       await tx.package.updateMany({ where: { deliveryId: id }, data: { status: 'IN_TRANSIT' } })
-      await this.event(tx, ctx, id, 'STARTED', 'En route vers le destinataire', true, op)
+      await this.event(tx, ctx, id, 'STARTED', d.mode === 'PICKUP' ? "En route vers l'entrepôt de retrait" : 'En route vers le destinataire', true, op)
       if (d.driverId) await tx.driver.update({ where: { id: d.driverId }, data: { status: 'on_mission' } })
       return this.getOwned(ctx, id, tx)
     })
     this.broadcast(ctx, delivery)
     await this.notifications.notifyRoles(ctx.companyId, ['COMPANY_ADMIN', 'LOGISTICS_MANAGER'], 'DRIVER_EN_ROUTE', { number: delivery.number }, { type: 'Delivery', id })
-    this.customerMail.notify(ctx.companyId, id, 'EN_ROUTE')
+    // Retrait : le client est prévenu quand la marchandise l'attend à l'entrepôt, pas au départ.
+    if (delivery.mode !== 'PICKUP') this.customerMail.notify(ctx.companyId, id, 'EN_ROUTE')
     return delivery
   }
 
@@ -560,7 +570,7 @@ export class DeliveriesService {
       const d = await this.getOwned(ctx, id, tx)
       this.assertOperator(ctx, d)
       await this.move(tx, ctx, d, 'ARRIVED')
-      await this.event(tx, ctx, id, 'ARRIVED', 'Chauffeur arrivé à destination', true, op)
+      await this.event(tx, ctx, id, 'ARRIVED', d.mode === 'PICKUP' ? "Chauffeur arrivé à l'entrepôt de retrait" : 'Chauffeur arrivé à destination', true, op)
       await this.closeTracking(tx, d.driverId, id, op?.occurredAt)
       return this.getOwned(ctx, id, tx)
     })
@@ -578,7 +588,11 @@ export class DeliveriesService {
     }
     const d = await this.getOwned(ctx, id)
     this.assertOperator(ctx, d)
-    if (!['ARRIVED', 'FAILED', 'IN_TRANSIT', 'DELIVERED', 'PARTIALLY_DELIVERED'].includes(d.status)) throw new ConflictException('Cette livraison ne peut pas recevoir de preuve.')
+    // L'entrepôt de retrait (sans droit de clôture) n'ajoute des preuves qu'au guichet.
+    const counter = d.mode === 'PICKUP' && d.status === 'AWAITING_PICKUP'
+    if (!ctx.driverId && !ctx.permissions.has('delivery.resolve') && !counter) throw new ForbiddenException('Permission insuffisante.')
+    if (counter) assertWarehouse(ctx, location(d))
+    if (!['ARRIVED', 'FAILED', 'IN_TRANSIT', 'AWAITING_PICKUP', 'DELIVERED', 'PARTIALLY_DELIVERED'].includes(d.status)) throw new ConflictException('Cette livraison ne peut pas recevoir de preuve.')
     if (['SIGNATURE', 'PHOTO_GOODS', 'PHOTO_PLACE'].includes(body.type) && !file) throw new UnprocessableEntityException('Un fichier est obligatoire pour cette preuve.')
     const saved = file ? await this.files.save(ctx, file) : null
     const proof = await this.prisma.proofOfDelivery.create({
@@ -606,7 +620,7 @@ export class DeliveriesService {
   }
 
   /** Une livraison n'est jamais confirmée sans les preuves exigées par la politique de l'entreprise. */
-  private async assertProofs(tx: Tx, ctx: TenantContext, d: { id: string }, body: { recipientName?: string; latitude?: number; longitude?: number }) {
+  private async assertProofs(tx: Tx, ctx: TenantContext, d: { id: string; mode: string }, body: { recipientName?: string; latitude?: number; longitude?: number }) {
     const settings = await tx.companySettings.findUnique({ where: { companyId: ctx.companyId } })
     const proofs = await tx.proofOfDelivery.findMany({ where: { deliveryId: d.id } })
     const has = (type: string) => proofs.some((p) => p.type === type)
@@ -614,7 +628,8 @@ export class DeliveriesService {
     if (settings?.requireSignature && !has('SIGNATURE')) missing.push('signature')
     if (settings?.requirePhoto && !has('PHOTO_GOODS') && !has('PHOTO_PLACE')) missing.push('photo')
     if (settings?.requireRecipientName && !body.recipientName) missing.push('nom du réceptionnaire')
-    if (settings?.requireGpsOnProof && (body.latitude === undefined || body.longitude === undefined) && !has('GPS')) missing.push('position GPS')
+    // Au guichet de l'entrepôt de retrait, la position n'apporte rien : elle n'est pas exigée.
+    if (settings?.requireGpsOnProof && d.mode !== 'PICKUP' && (body.latitude === undefined || body.longitude === undefined) && !has('GPS')) missing.push('position GPS')
     if (missing.length) {
       throw new UnprocessableEntityException({ message: `Preuves manquantes : ${missing.join(', ')}.`, code: 'PROOF_MISSING', errors: missing.map((message) => ({ message })) })
     }
@@ -626,7 +641,8 @@ export class DeliveriesService {
     if (body.latitude !== undefined && body.longitude !== undefined) await tx.proofOfDelivery.create({ data: { companyId: ctx.companyId, deliveryId: id, type: 'GPS', latitude: body.latitude, longitude: body.longitude, capturedAt: when, createdById: ctx.userId } })
   }
 
-  async confirm(ctx: TenantContext, id: string, body: z.infer<typeof confirmSchema>) {
+  /** `counter` : remise au guichet de l'entrepôt de retrait, réservée aux livraisons en retrait. */
+  async confirm(ctx: TenantContext, id: string, body: z.infer<typeof confirmSchema>, counter = false) {
     const replay = await this.replayed(ctx, id, body)
     if (replay) return replay
     const reached = await this.alreadyReached(ctx, id, 'DELIVERED', body)
@@ -635,6 +651,7 @@ export class DeliveriesService {
       const d = await this.getOwned(ctx, id, tx)
       this.assertOperator(ctx, d)
       if (d.status === 'DELIVERED') throw new ConflictException({ message: 'Cette livraison est déjà confirmée.', code: 'ALREADY_CONFIRMED' })
+      this.assertHandover(ctx, d, counter)
       await this.assertProofs(tx, ctx, d, body)
       await this.move(tx, ctx, d, 'DELIVERED', undefined, { deliveredAt: body.occurredAt ?? new Date(), recipientName: body.recipientName, recipientPhone: body.recipientPhone })
       await this.finalProofs(tx, ctx, id, body)
@@ -643,10 +660,11 @@ export class DeliveriesService {
         if (item.orderItemId) await tx.orderItem.update({ where: { id: item.orderItemId }, data: { quantityDelivered: { increment: item.quantity } } })
       }
       await tx.package.updateMany({ where: { deliveryId: id }, data: { status: 'DELIVERED' } })
-      await this.event(tx, ctx, id, 'DELIVERED', 'Livraison confirmée', true, body)
+      await this.event(tx, ctx, id, 'DELIVERED', d.mode === 'PICKUP' ? 'Marchandise retirée par le client' : 'Livraison confirmée', true, body)
       if (d.orderId) await this.syncOrder(tx, ctx, d.orderId)
       await this.audit.log(ctx, 'delivery.confirm', 'Delivery', id, { recipient: body.recipientName }, tx)
-      await this.releaseTracking(tx, d.driverId, id)
+      // Retrait : le chauffeur a été libéré à la réception par l'entrepôt.
+      if (d.mode !== 'PICKUP') await this.releaseTracking(tx, d.driverId, id)
       return this.getOwned(ctx, id, tx)
     })
     this.broadcast(ctx, delivery)
@@ -655,12 +673,13 @@ export class DeliveriesService {
     return delivery
   }
 
-  async partialConfirm(ctx: TenantContext, id: string, body: z.infer<typeof partialSchema>) {
+  async partialConfirm(ctx: TenantContext, id: string, body: z.infer<typeof partialSchema>, counter = false) {
     const replay = await this.replayed(ctx, id, body)
     if (replay) return replay
     const delivery = await this.prisma.atomic(async (tx) => {
       const d = await this.getOwned(ctx, id, tx)
       this.assertOperator(ctx, d)
+      this.assertHandover(ctx, d, counter)
       await this.assertProofs(tx, ctx, d, body)
       let anyDelivered = false
       let anyShort = false
@@ -679,10 +698,10 @@ export class DeliveriesService {
       if (!anyShort) throw new UnprocessableEntityException('Aucun écart : utilisez la confirmation complète.')
       await this.move(tx, ctx, d, 'PARTIALLY_DELIVERED', undefined, { deliveredAt: body.occurredAt ?? new Date(), recipientName: body.recipientName, recipientPhone: body.recipientPhone })
       await this.finalProofs(tx, ctx, id, body)
-      await this.event(tx, ctx, id, 'PARTIALLY_DELIVERED', 'Livraison partielle confirmée', true, body)
+      await this.event(tx, ctx, id, 'PARTIALLY_DELIVERED', d.mode === 'PICKUP' ? 'Marchandise retirée en partie par le client' : 'Livraison partielle confirmée', true, body)
       if (d.orderId) await this.syncOrder(tx, ctx, d.orderId)
       await this.audit.log(ctx, 'delivery.partial_confirm', 'Delivery', id, { items: body.items }, tx)
-      await this.releaseTracking(tx, d.driverId, id)
+      if (d.mode !== 'PICKUP') await this.releaseTracking(tx, d.driverId, id)
       return this.getOwned(ctx, id, tx)
     })
     this.broadcast(ctx, delivery)
@@ -737,6 +756,7 @@ export class DeliveriesService {
       const driverId = body.driverId ?? d.driverId
       const vehicleId = body.vehicleId ?? d.vehicleId
       if (!driverId || !vehicleId) throw new UnprocessableEntityException('Un chauffeur et un véhicule sont nécessaires.')
+      this.assertNeedsDriver(d)
       await this.checkAssignment(tx, ctx.companyId, id, driverId, vehicleId)
       await this.move(tx, ctx, d, 'ASSIGNED', body.note, { scheduledAt: body.scheduledAt, driverId, vehicleId, driverResponse: null, failureReason: null, failureComment: null, attempts: d.attempts + 1 })
       await tx.deliveryAssignment.create({ data: { deliveryId: id, driverId, vehicleId, assignedBy: ctx.userId } })
@@ -755,7 +775,9 @@ export class DeliveriesService {
     const delivery = await this.prisma.atomic(async (tx) => {
       const d = await this.getOwned(ctx, id, tx)
       if (d.stockReturned) throw new ConflictException('Le retour de cette livraison est déjà enregistré.')
-      const fullReturn = d.status === 'FAILED' || d.status === 'LOADED'
+      // Retrait : un client qui ne vient pas, la marchandise rentre dans le stock de l'entrepôt qui la garde.
+      const fullReturn = d.status === 'FAILED' || d.status === 'LOADED' || d.status === 'AWAITING_PICKUP'
+      const target = location(d)
       await this.move(tx, ctx, d, 'RETURNED', body.note, { stockReturned: true })
       for (const item of d.items) {
         const quantity = fullReturn ? item.quantity : item.quantityRefused
@@ -767,7 +789,8 @@ export class DeliveriesService {
             await this.stock.apply(
               tx,
               {
-                companyId: ctx.companyId, warehouseId: d.warehouseId, productId: item.productId, locationId: a.locationId, batchId: a.batchId,
+                // Les emplacements de l'entrepôt de départ n'existent pas ailleurs : le lot est conservé.
+                companyId: ctx.companyId, warehouseId: target, productId: item.productId, locationId: target === d.warehouseId ? a.locationId : null, batchId: a.batchId,
                 onHand: take, damaged: body.condition === 'DAMAGED' ? take : 0, blocked: body.condition === 'QUARANTINE' ? take : 0,
               },
               { direction: 'IN', reason: 'CUSTOMER_RETURN', refType: 'Delivery', refId: id, note: body.note, userId: ctx.userId },
@@ -784,7 +807,7 @@ export class DeliveriesService {
       return this.getOwned(ctx, id, tx)
     })
     this.broadcast(ctx, delivery)
-    this.realtime.toCompany(ctx.companyId, 'stock.changed', { warehouseId: delivery.warehouseId })
+    this.realtime.toCompany(ctx.companyId, 'stock.changed', { warehouseId: location(delivery) })
     return delivery
   }
 
@@ -817,6 +840,149 @@ export class DeliveriesService {
     })
     await this.notifications.notifyRoles(ctx.companyId, ['COMPANY_ADMIN', 'LOGISTICS_MANAGER'], 'INCIDENT', { number: d.number, reason: body.type }, { type: 'Delivery', id })
     return row
+  }
+
+  // ---------- Retrait en entrepôt ----------
+  //
+  // Une livraison en mode PICKUP n'est pas remise à l'adresse du client : il vient la chercher dans
+  // un entrepôt de l'entreprise (même agence ou autre agence). Deux parcours :
+  // - retrait dans l'entrepôt où se trouve la marchandise : prête → disponible au retrait, sans chauffeur ;
+  // - retrait ailleurs : le parcours chauffeur habituel jusqu'à l'entrepôt de retrait, qui réceptionne.
+  // Puis l'entrepôt de retrait remet la marchandise au guichet (preuves habituelles), ou la retourne en stock.
+  // Une livraison à domicile (HOME, par défaut) ne passe jamais par ces étapes.
+
+  private async companyWarehouse(tx: Tx, ctx: TenantContext, id: string) {
+    const warehouse = await tx.warehouse.findFirst({ where: { id, companyId: ctx.companyId, status: 'active' } })
+    if (!warehouse) throw new NotFoundException('Entrepôt de retrait introuvable.')
+    return warehouse
+  }
+
+  private assertPickup(d: { mode: string }) {
+    if (d.mode !== 'PICKUP') throw new ConflictException({ message: 'Cette livraison se fait à domicile, pas en retrait.', code: 'NOT_PICKUP' })
+  }
+
+  /** Un retrait dans l'entrepôt où se trouve déjà la marchandise n'a pas de trajet : aucun chauffeur. */
+  private assertNeedsDriver(d: { mode: string; pickupWarehouseId: string | null; warehouseId: string; heldAtWarehouseId: string | null }) {
+    if (d.mode === 'PICKUP' && d.pickupWarehouseId === location(d)) {
+      throw new ConflictException({ message: "Le client retire sa marchandise dans l'entrepôt où elle se trouve : mettez-la à disposition, sans chauffeur.", code: 'PICKUP_ON_SITE' })
+    }
+  }
+
+  /** Retrait : la remise se fait au guichet de l'entrepôt qui garde la marchandise, jamais par le chauffeur. */
+  private assertHandover(ctx: TenantContext, d: { mode: string; status: string; warehouseId: string; heldAtWarehouseId: string | null }, counter: boolean) {
+    if (d.mode !== 'PICKUP') {
+      if (counter) this.assertPickup(d)
+      return
+    }
+    if (ctx.role === 'DRIVER') throw new ForbiddenException("Retrait en entrepôt : déposez la marchandise à l'entrepôt, qui la remettra au client.")
+    if (d.status !== 'AWAITING_PICKUP') throw new ConflictException({ message: "La marchandise doit d'abord être disponible au retrait.", code: 'NOT_AVAILABLE' })
+    assertWarehouse(ctx, location(d))
+  }
+
+  /** Sortie physique du stock réservé, une seule fois par livraison. */
+  private async issueStock(tx: Tx, ctx: TenantContext, d: Awaited<ReturnType<DeliveriesService['getOwned']>>) {
+    if (d.stockIssued) return
+    for (const item of d.items) {
+      const where = item.orderItemId ? { orderItemId: item.orderItemId } : { deliveryItemId: item.id }
+      const allocations = await this.stock.consume(tx, ctx.companyId, where, item.quantity, {
+        direction: 'OUT', reason: 'DELIVERY', refType: 'Delivery', refId: d.id, userId: ctx.userId,
+      })
+      await tx.deliveryItem.update({ where: { id: item.id }, data: { allocations: JSON.stringify(allocations) } })
+      if (item.orderItemId) await tx.orderItem.update({ where: { id: item.orderItemId }, data: { quantityShipped: { increment: item.quantity } } })
+    }
+    await tx.delivery.update({ where: { id: d.id }, data: { stockIssued: true } })
+    d.stockIssued = true
+    if (d.orderId) await this.syncOrder(tx, ctx, d.orderId)
+  }
+
+  private async available(tx: Tx, ctx: TenantContext, d: Awaited<ReturnType<DeliveriesService['getOwned']>>, op?: Op) {
+    await this.move(tx, ctx, d, 'AWAITING_PICKUP', op?.note, { availableAt: op?.occurredAt ?? new Date(), heldAtWarehouseId: d.pickupWarehouseId })
+    await tx.package.updateMany({ where: { deliveryId: d.id }, data: { status: 'AVAILABLE' } })
+    await this.event(tx, ctx, d.id, 'AVAILABLE', `Disponible au retrait : ${d.pickupWarehouse?.name ?? 'entrepôt'}`, true, op)
+  }
+
+  private async afterAvailable(ctx: TenantContext, delivery: Awaited<ReturnType<DeliveriesService['getOwned']>>) {
+    this.broadcast(ctx, delivery)
+    await this.notifications.notifyRoles(ctx.companyId, ['COMPANY_ADMIN', 'LOGISTICS_MANAGER', 'WAREHOUSE_MANAGER'], 'PICKUP_READY', { number: delivery.number, warehouse: delivery.pickupWarehouse?.name ?? '' }, { type: 'Delivery', id: delivery.id })
+    this.customerMail.notify(ctx.companyId, delivery.id, 'PICKUP_READY')
+  }
+
+  /** Retrait dans l'entrepôt où se trouve la marchandise : elle sort du stock et attend le client. */
+  async makeAvailable(ctx: TenantContext, id: string, op?: Op) {
+    const replay = await this.replayed(ctx, id, op)
+    if (replay) return replay
+    const delivery = await this.prisma.atomic(async (tx) => {
+      const d = await this.getOwned(ctx, id, tx)
+      this.assertPickup(d)
+      if (d.pickupWarehouseId !== location(d)) {
+        throw new ConflictException({ message: "La marchandise n'est pas dans l'entrepôt de retrait : affectez un chauffeur pour l'y acheminer.", code: 'PICKUP_ELSEWHERE' })
+      }
+      assertWarehouse(ctx, location(d))
+      await this.available(tx, ctx, d, op)
+      await this.issueStock(tx, ctx, d)
+      await this.audit.log(ctx, 'delivery.pickup_available', 'Delivery', id, undefined, tx)
+      return this.getOwned(ctx, id, tx)
+    })
+    await this.afterAvailable(ctx, delivery)
+    this.realtime.toCompany(ctx.companyId, 'stock.changed', { warehouseId: delivery.warehouseId })
+    for (const item of delivery.items) await this.stock.checkLow(ctx.companyId, delivery.warehouseId, item.productId)
+    return delivery
+  }
+
+  /** L'entrepôt de retrait réceptionne la marchandise apportée par le chauffeur, dont la mission s'arrête là. */
+  async receiveAtPickup(ctx: TenantContext, id: string, op?: Op) {
+    const replay = await this.replayed(ctx, id, op)
+    if (replay) return replay
+    const delivery = await this.prisma.atomic(async (tx) => {
+      const d = await this.getOwned(ctx, id, tx)
+      this.assertPickup(d)
+      assertWarehouse(ctx, d.pickupWarehouseId!)
+      if (!['IN_TRANSIT', 'ARRIVED'].includes(d.status)) throw new ConflictException('Seule une marchandise en route ou arrivée peut être réceptionnée.')
+      await this.available(tx, ctx, d, op)
+      await this.audit.log(ctx, 'delivery.pickup_received', 'Delivery', id, { warehouseId: d.pickupWarehouseId }, tx)
+      await this.releaseTracking(tx, d.driverId, id)
+      return this.getOwned(ctx, id, tx)
+    })
+    await this.afterAvailable(ctx, delivery)
+    return delivery
+  }
+
+  /**
+   * Mode de remise et entrepôt de retrait. Avant le chargement : simple modification.
+   * Marchandise disponible au retrait : le client la veut dans un autre entrepôt de l'entreprise,
+   * elle redevient prête et repart avec un chauffeur (le stock n'est pas sorti une seconde fois).
+   */
+  async changePickup(ctx: TenantContext, id: string, body: z.infer<typeof pickupSchema>) {
+    const delivery = await this.prisma.atomic(async (tx) => {
+      const d = await this.getOwned(ctx, id, tx)
+      if (body.mode === 'HOME') {
+        if (!BEFORE_LOADING.includes(d.status as DeliveryStatus) || d.stockIssued) throw new ConflictException('La livraison à domicile ne se choisit plus une fois la marchandise sortie du stock.')
+        await tx.delivery.update({ where: { id }, data: { mode: 'HOME', pickupWarehouseId: null } })
+        await this.event(tx, ctx, id, 'MODE_CHANGED', 'Livraison à domicile', false, { note: body.note })
+      } else {
+        if (!body.pickupWarehouseId) throw new UnprocessableEntityException("Choisissez l'entrepôt où le client retirera sa marchandise.")
+        const target = await this.companyWarehouse(tx, ctx, body.pickupWarehouseId)
+        if (d.status === 'AWAITING_PICKUP') {
+          if (target.id === location(d)) throw new ConflictException('La marchandise est déjà dans cet entrepôt.')
+          assertWarehouse(ctx, location(d))
+          await this.move(tx, ctx, d, 'READY', body.note, { pickupWarehouseId: target.id, availableAt: null })
+          await tx.package.updateMany({ where: { deliveryId: id }, data: { status: 'CREATED', loadScannedAt: null, deliverScannedAt: null } })
+          await this.event(tx, ctx, id, 'PICKUP_CHANGED', `Envoi vers un autre point de retrait : ${target.name}`, true, { note: body.note })
+        } else if (BEFORE_LOADING.includes(d.status as DeliveryStatus)) {
+          if (d.status === 'ASSIGNED' && target.id === location(d)) {
+            throw new ConflictException("Un chauffeur est affecté : le retrait ne peut pas se faire dans l'entrepôt où se trouve la marchandise.")
+          }
+          await tx.delivery.update({ where: { id }, data: { mode: 'PICKUP', pickupWarehouseId: target.id } })
+          await this.event(tx, ctx, id, 'PICKUP_CHANGED', `Retrait prévu : ${target.name}`, false, { note: body.note })
+        } else {
+          throw new ConflictException("Le point de retrait ne peut plus être modifié pendant le transport.")
+        }
+      }
+      await this.audit.log(ctx, 'delivery.pickup_changed', 'Delivery', id, body, tx)
+      return this.getOwned(ctx, id, tx)
+    })
+    this.broadcast(ctx, delivery)
+    return delivery
   }
 
   // ---------- Effets de bord ----------

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
-  Bell, Boxes, Building2, CarFront, ChartNoAxesCombined, ClipboardCheck, ContactRound, CreditCard, Factory, FileClock, Layers, LayoutDashboard, LogOut, MapPin, Menu, Package, PackageCheck, Route, Search, Settings2, ShoppingCart, Tags, Truck, Users, UserCog, Warehouse, ArrowLeftRight,
+  Bell, Boxes, Building2, CarFront, ChartNoAxesCombined, ClipboardCheck, ContactRound, CreditCard, Factory, FileClock, Layers, LayoutDashboard, LogOut, MapPin, Menu, Package, PackageCheck, Route, Search, Send, Settings2, ShoppingCart, Tags, Truck, Users, UserCog, Warehouse, ArrowLeftRight,
 } from 'lucide-react'
 import { api } from '../lib/api.js'
 import { useAuth } from '../lib/auth.jsx'
@@ -37,6 +37,7 @@ const COMPANY_NAV = [
     items: [
       { to: '/colis', label: 'Colis', icon: PackageCheck, perm: ['package.manage', 'delivery.view'] },
       { to: '/livraisons', label: 'Livraisons', icon: Truck, perm: ['delivery.view'] },
+      { to: '/expeditions', label: 'Expéditions', icon: Send, perm: ['shipment.view'] },
       { to: '/tournees', label: 'Tournées', icon: Route, perm: ['route.manage'] },
       { to: '/suivi', label: 'Suivi en direct', icon: MapPin, perm: ['tracking.view'] },
       { to: '/chauffeurs', label: 'Chauffeurs', icon: Users, perm: ['driver.view'] },

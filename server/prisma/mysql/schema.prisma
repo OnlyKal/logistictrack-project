@@ -57,6 +57,7 @@ model Company {
   vehicles              Vehicle[]
   routes                Route[]
   deliveries            Delivery[]
+  shipments             Shipment[]
   packages              Package[]
   trackingSessions      TrackingSession[]
   subscriptions         Subscription[]
@@ -69,20 +70,20 @@ model Company {
 }
 
 model CompanySettings {
-  companyId            String  @id
-  company              Company @relation(fields: [companyId], references: [id])
-  stockStrategy        String  @default("FIFO")
-  useLocations         Boolean @default(false)
-  driversCanRefuse     Boolean @default(true)
-  requireSignature     Boolean @default(true)
-  requirePhoto         Boolean @default(false)
-  requireRecipientName Boolean @default(true)
-  requireGpsOnProof    Boolean @default(false)
-  requireQrOnLoad      Boolean @default(false)
-  gpsRetentionDays     Int     @default(90)
-  currency             String  @default("USD")
-  timezone             String  @default("Africa/Kinshasa")
-  locale               String  @default("fr")
+  companyId              String  @id
+  company                Company @relation(fields: [companyId], references: [id])
+  stockStrategy          String  @default("FIFO")
+  useLocations           Boolean @default(false)
+  driversCanRefuse       Boolean @default(true)
+  requireSignature       Boolean @default(true)
+  requirePhoto           Boolean @default(false)
+  requireRecipientName   Boolean @default(true)
+  requireGpsOnProof      Boolean @default(false)
+  requireQrOnLoad        Boolean @default(false)
+  gpsRetentionDays       Int     @default(90)
+  currency               String  @default("USD")
+  timezone               String  @default("Africa/Kinshasa")
+  locale                 String  @default("fr")
   /// E-mails aux clients, désactivés par défaut : chaque entreprise choisit.
   customerEmailEnRoute   Boolean @default(false)
   customerEmailDelivered Boolean @default(false)
@@ -274,7 +275,13 @@ model Warehouse {
   orders             Order[]
   drivers            Driver[]
   routes             Route[]
-  deliveries         Delivery[]
+  deliveries         Delivery[]          @relation("DeliveryOrigin")
+  pickupDeliveries   Delivery[]          @relation("DeliveryPickup")
+  shipmentsFrom      Shipment[]          @relation("ShipmentOrigin")
+  shipmentsTo        Shipment[]          @relation("ShipmentDestination")
+  shipmentsHere      Shipment[]          @relation("ShipmentCurrent")
+  shipmentsIncoming  Shipment[]          @relation("ShipmentNext")
+  shipmentStops      ShipmentStop[]
   packages           Package[]
 
   @@unique([companyId, code])
@@ -651,21 +658,21 @@ model GoodsReceiptItem {
 // ---------- Clients ----------
 
 model Customer {
-  id        String   @id @default(uuid())
-  companyId String
-  company   Company  @relation(fields: [companyId], references: [id])
-  code      String
-  name      String
-  type      String   @default("COMPANY")
-  phone     String?
-  email     String?
-  address   String?
-  notes     String? @db.Text
-  status    String   @default("active")
+  id                 String   @id @default(uuid())
+  companyId          String
+  company            Company  @relation(fields: [companyId], references: [id])
+  code               String
+  name               String
+  type               String   @default("COMPANY")
+  phone              String?
+  email              String?
+  address            String?
+  notes              String? @db.Text
+  status             String   @default("active")
   /// Le client peut refuser les e-mails de livraison, même si l'entreprise les a activés.
-  emailNotifications Boolean @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  emailNotifications Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   contacts       CustomerContact[]
   deliveryPoints DeliveryPoint[]
@@ -900,39 +907,46 @@ model RouteStop {
 // ---------- Logistique ----------
 
 model Delivery {
-  id              String        @id @default(uuid())
-  companyId       String
-  company         Company       @relation(fields: [companyId], references: [id])
-  number          String
-  orderId         String?
-  order           Order?        @relation(fields: [orderId], references: [id])
-  customerId      String
-  customer        Customer      @relation(fields: [customerId], references: [id])
-  deliveryPointId String
-  deliveryPoint   DeliveryPoint @relation(fields: [deliveryPointId], references: [id])
-  warehouseId     String
-  warehouse       Warehouse     @relation(fields: [warehouseId], references: [id])
-  driverId        String?
-  driver          Driver?       @relation(fields: [driverId], references: [id])
-  vehicleId       String?
-  vehicle         Vehicle?      @relation(fields: [vehicleId], references: [id])
-  status          String        @default("DRAFT")
-  driverResponse  String?
-  priority        String        @default("NORMAL")
-  scheduledAt     DateTime?
-  instructions    String? @db.Text
-  justification   String? @db.Text
-  stockIssued     Boolean       @default(false)
-  stockReturned   Boolean       @default(false)
-  attempts        Int           @default(1)
-  failureReason   String?
-  failureComment  String? @db.Text
-  recipientName   String?
-  recipientPhone  String?
-  deliveredAt     DateTime?
-  createdById     String?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  id                String        @id @default(uuid())
+  companyId         String
+  company           Company       @relation(fields: [companyId], references: [id])
+  number            String
+  orderId           String?
+  order             Order?        @relation(fields: [orderId], references: [id])
+  customerId        String
+  customer          Customer      @relation(fields: [customerId], references: [id])
+  deliveryPointId   String
+  deliveryPoint     DeliveryPoint @relation(fields: [deliveryPointId], references: [id])
+  warehouseId       String
+  warehouse         Warehouse     @relation("DeliveryOrigin", fields: [warehouseId], references: [id])
+  /// HOME : livraison à l'adresse du client. PICKUP : le client retire sa marchandise dans un entrepôt de l'entreprise.
+  mode              String        @default("HOME")
+  pickupWarehouseId String?
+  pickupWarehouse   Warehouse?    @relation("DeliveryPickup", fields: [pickupWarehouseId], references: [id])
+  /// Entrepôt où se trouve la marchandise quand ce n'est plus l'entrepôt de départ (retrait).
+  heldAtWarehouseId String?
+  availableAt       DateTime?
+  driverId          String?
+  driver            Driver?       @relation(fields: [driverId], references: [id])
+  vehicleId         String?
+  vehicle           Vehicle?      @relation(fields: [vehicleId], references: [id])
+  status            String        @default("DRAFT")
+  driverResponse    String?
+  priority          String        @default("NORMAL")
+  scheduledAt       DateTime?
+  instructions      String? @db.Text
+  justification     String? @db.Text
+  stockIssued       Boolean       @default(false)
+  stockReturned     Boolean       @default(false)
+  attempts          Int           @default(1)
+  failureReason     String?
+  failureComment    String? @db.Text
+  recipientName     String?
+  recipientPhone    String?
+  deliveredAt       DateTime?
+  createdById       String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
 
   items            DeliveryItem[]
   packages         Package[]
@@ -948,6 +962,7 @@ model Delivery {
   @@index([companyId, status])
   @@index([companyId, scheduledAt])
   @@index([companyId, driverId, status])
+  @@index([companyId, pickupWarehouseId, status])
 }
 
 model DeliveryItem {
@@ -1088,6 +1103,97 @@ model PackageItem {
   quantity    Decimal @db.Decimal(18,3)
 }
 
+// ---------- Expéditions (messagerie) ----------
+// Un expéditeur (particulier ou société) dépose un colis au guichet d'un entrepôt ; l'entreprise l'achemine
+// d'entrepôt en entrepôt jusqu'à l'entrepôt de destination, où le destinataire le retire.
+// Indépendant des commandes, des livraisons et du stock : le colis n'appartient pas à l'entreprise.
+
+model Shipment {
+  id                     String          @id @default(uuid())
+  companyId              String
+  company                Company         @relation(fields: [companyId], references: [id])
+  number                 String
+  trackingNumber         String          @unique
+  trackingToken          String          @unique
+  status                 String          @default("REGISTERED")
+  senderName             String
+  senderPhone            String
+  senderEmail            String?
+  recipientName          String
+  recipientPhone         String
+  recipientEmail         String?
+  description            String
+  parcels                Int             @default(1)
+  weightKg               Decimal? @db.Decimal(18,3)
+  declaredValue          Decimal? @db.Decimal(18,2)
+  fee                    Decimal         @default(0) @db.Decimal(18,2)
+  /// SENDER : payé au dépôt. RECIPIENT : payé par le destinataire au retrait.
+  paymentMode            String          @default("SENDER")
+  feePaidAt              DateTime?
+  instructions           String? @db.Text
+  originWarehouseId      String
+  originWarehouse        Warehouse       @relation("ShipmentOrigin", fields: [originWarehouseId], references: [id])
+  destinationWarehouseId String
+  destinationWarehouse   Warehouse       @relation("ShipmentDestination", fields: [destinationWarehouseId], references: [id])
+  /// Entrepôt où se trouve le colis ; vide pendant un trajet.
+  currentWarehouseId     String?
+  currentWarehouse       Warehouse?      @relation("ShipmentCurrent", fields: [currentWarehouseId], references: [id])
+  /// Entrepôt vers lequel le colis roule pendant un trajet.
+  nextWarehouseId        String?
+  nextWarehouse          Warehouse?      @relation("ShipmentNext", fields: [nextWarehouseId], references: [id])
+  transportInfo          String?
+  pickedUpAt             DateTime?
+  pickedUpBy             String?
+  pickedUpPhone          String?
+  pickedUpIdDocument     String?
+  signatureFileId        String?
+  createdById            String?
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+  events                 ShipmentEvent[]
+  stops                  ShipmentStop[]
+
+  @@unique([companyId, number])
+  @@index([companyId, status])
+  @@index([companyId, currentWarehouseId, status])
+  @@index([companyId, nextWarehouseId, status])
+  @@index([companyId, createdAt])
+}
+
+/// Escale prévue d'une expédition, dans l'ordre du trajet (hors dépôt et destination).
+model ShipmentStop {
+  id          String    @id @default(uuid())
+  shipmentId  String
+  shipment    Shipment  @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  position    Int
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  arrivedAt   DateTime?
+  departedAt  DateTime?
+  /// Escale non effectuée : le colis est passé directement à une étape suivante.
+  skipped     Boolean   @default(false)
+
+  @@unique([shipmentId, position])
+}
+
+/// Historique d'une expédition : chaque étape, avec le lieu tel qu'il s'appelait à ce moment.
+model ShipmentEvent {
+  id          String   @id @default(uuid())
+  companyId   String
+  shipmentId  String
+  shipment    Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  type        String
+  label       String
+  warehouseId String?
+  place       String?
+  isPublic    Boolean  @default(true)
+  note        String? @db.Text
+  userId      String?
+  occurredAt  DateTime @default(now())
+
+  @@index([shipmentId, occurredAt])
+}
+
 // ---------- Suivi GPS (téléphone du chauffeur uniquement) ----------
 
 model TrackingSession {
@@ -1161,23 +1267,23 @@ model Subscription {
 }
 
 model SubscriptionInvoice {
-  id             String       @id @default(uuid())
-  companyId      String
-  company        Company      @relation(fields: [companyId], references: [id])
-  subscriptionId String
-  subscription   Subscription @relation(fields: [subscriptionId], references: [id])
-  number         String       @unique
-  monthlyAmount  Decimal      @default(0) @db.Decimal(18,2)
-  durationMonths Int          @default(1)
-  discountPercent Int         @default(0)
-  amount         Decimal @db.Decimal(18,2)
-  currency       String
-  status         String       @default("UNPAID")
-  periodStart    DateTime
-  periodEnd      DateTime
-  issuedAt       DateTime     @default(now())
-  paidAt         DateTime?
-  payments       Payment[]
+  id              String       @id @default(uuid())
+  companyId       String
+  company         Company      @relation(fields: [companyId], references: [id])
+  subscriptionId  String
+  subscription    Subscription @relation(fields: [subscriptionId], references: [id])
+  number          String       @unique
+  monthlyAmount   Decimal      @default(0) @db.Decimal(18,2)
+  durationMonths  Int          @default(1)
+  discountPercent Int          @default(0)
+  amount          Decimal @db.Decimal(18,2)
+  currency        String
+  status          String       @default("UNPAID")
+  periodStart     DateTime
+  periodEnd       DateTime
+  issuedAt        DateTime     @default(now())
+  paidAt          DateTime?
+  payments        Payment[]
 
   @@index([companyId])
 }

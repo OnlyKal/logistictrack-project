@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { FAILURE_REASONS, PACKAGING_TYPES, PROOF_TYPES } from '../../common/constants.js'
+import { DELIVERY_MODES, FAILURE_REASONS, PACKAGING_TYPES, PROOF_TYPES } from '../../common/constants.js'
 import { lat, lng, optDate, qty, qtyOrZero, uuid } from '../../common/http.js'
 
 /** Champs communs des opérations terrain, y compris synchronisées après coup. */
@@ -24,7 +24,11 @@ export const deliverySchema = z.object({
   orderId: uuid.optional(), customerId: uuid.optional(), deliveryPointId: uuid.optional(), packageIds: z.array(uuid).min(1).max(500),
   scheduledAt: optDate, priority: z.enum(['LOW', 'NORMAL', 'HIGH', 'URGENT']).default('NORMAL'),
   instructions: z.string().max(2000).optional(), justification: z.string().max(1000).optional(),
+  // Par défaut, livraison à domicile : sans ces champs, rien ne change.
+  mode: z.enum(DELIVERY_MODES).default('HOME'), pickupWarehouseId: uuid.optional(),
 })
+/** Mode de remise ou entrepôt de retrait : modifiable avant le chargement, ou pour envoyer la marchandise vers un autre entrepôt. */
+export const pickupSchema = z.object({ mode: z.enum(DELIVERY_MODES).default('PICKUP'), pickupWarehouseId: uuid.optional(), note: z.string().max(500).optional() })
 export const deliveryPatch = z.object({
   scheduledAt: optDate, priority: z.enum(['LOW', 'NORMAL', 'HIGH', 'URGENT']).optional(), instructions: z.string().max(2000).nullish(),
 })

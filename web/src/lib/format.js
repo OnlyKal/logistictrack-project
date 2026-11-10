@@ -2,15 +2,21 @@
 // Une couleur garde le même sens partout, et deux états d'une même liste n'ont jamais la même couleur.
 export const DELIVERY_STATUS = {
   DRAFT: ['Brouillon', 'neutral'], PENDING: ['En attente', 'amber'], VALIDATED: ['Validée', 'indigo'], PREPARING: ['En préparation', 'violet'], READY: ['Prête', 'cyan'],
-  ASSIGNED: ['Affectée', 'blue'], LOADED: ['Chargée', 'teal'], IN_TRANSIT: ['En route', 'transit'], ARRIVED: ['Arrivée', 'lime'], PARTIALLY_DELIVERED: ['Livrée partiellement', 'orange'],
+  ASSIGNED: ['Affectée', 'blue'], LOADED: ['Chargée', 'teal'], IN_TRANSIT: ['En route', 'transit'], ARRIVED: ['Arrivée', 'lime'], AWAITING_PICKUP: ['Disponible au retrait', 'sky'], PARTIALLY_DELIVERED: ['Livrée partiellement', 'orange'],
   DELIVERED: ['Livrée', 'green'], FAILED: ['Échec', 'red'], RETURNED: ['Retournée', 'rose'], CANCELLED: ['Annulée', 'slate'],
+}
+/** Mode de remise : livraison à l'adresse du client, ou retrait par le client dans un entrepôt de l'entreprise. */
+export const DELIVERY_MODE = { HOME: 'Livraison à domicile', PICKUP: 'Retrait en entrepôt' }
+export const SHIPMENT_STATUS = {
+  REGISTERED: ['Déposé', 'indigo'], IN_TRANSIT: ['En transit', 'transit'], AT_WAREHOUSE: ['En escale', 'violet'], AVAILABLE: ['Disponible au retrait', 'sky'],
+  DELIVERED: ['Retiré', 'green'], RETURNED: ["Rendu à l'expéditeur", 'rose'], CANCELLED: ['Annulé', 'slate'],
 }
 export const ORDER_STATUS = {
   DRAFT: ['Brouillon', 'neutral'], SUBMITTED: ['Soumise', 'amber'], VALIDATING: ['En validation', 'sky'], VALIDATED: ['Validée', 'indigo'], PREPARING: ['En préparation', 'violet'],
   PARTIALLY_PREPARED: ['Partiellement préparée', 'orange'], READY: ['Prête', 'cyan'], PARTIALLY_SHIPPED: ['Partiellement expédiée', 'teal'], SHIPPED: ['Expédiée', 'transit'], CLOSED: ['Clôturée', 'green'], CANCELLED: ['Annulée', 'slate'],
 }
 export const TRANSFER_STATUS = { DRAFT: ['Brouillon', 'neutral'], PENDING: ['En attente', 'amber'], VALIDATED: ['Validé', 'indigo'], SHIPPED: ['En transit', 'transit'], CLOSED: ['Clôturé', 'green'], CANCELLED: ['Annulé', 'slate'] }
-export const PACKAGE_STATUS = { CREATED: ['Créé', 'neutral'], LOADED: ['Chargé', 'teal'], IN_TRANSIT: ['En route', 'transit'], DELIVERED: ['Livré', 'green'], FAILED: ['Échec', 'red'], RETURNED: ['Retourné', 'rose'] }
+export const PACKAGE_STATUS = { CREATED: ['Créé', 'neutral'], LOADED: ['Chargé', 'teal'], IN_TRANSIT: ['En route', 'transit'], AVAILABLE: ['Au point de retrait', 'sky'], DELIVERED: ['Livré', 'green'], FAILED: ['Échec', 'red'], RETURNED: ['Retourné', 'rose'] }
 export const ROUTE_STATUS = { PLANNED: ['Planifiée', 'indigo'], IN_PROGRESS: ['En cours', 'transit'], DONE: ['Clôturée', 'green'], CANCELLED: ['Annulée', 'slate'] }
 export const COMPANY_STATUS = { active: ['Active', 'green'], suspended: ['Suspendue', 'red'], expired: ['Expirée', 'orange'], closed: ['Fermée', 'slate'] }
 export const SUBSCRIPTION_STATUS = { TRIAL: ['Essai', 'sky'], ACTIVE: ['Actif', 'green'], GRACE: ['Période de grâce', 'orange'], EXPIRED: ['Expiré', 'red'], SUSPENDED: ['Suspendu', 'rose'] }

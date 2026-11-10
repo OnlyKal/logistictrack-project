@@ -7,7 +7,7 @@ import { COMPANY_STATUS, INVOICE_STATUS, SUBSCRIPTION_STATUS, date, dateTime, du
 import { BackLink, CrudPage, FormModal, ResetPasswordModal } from '../../components/CrudPage.jsx'
 import { KeyRound } from 'lucide-react'
 import { EmailLog } from '../../components/EmailLog.jsx'
-import { Alert, Button, Card, Checkbox, Confirm, DataTable, Empty, ErrorBox, Field, Input, PageHead, Select, Status, useAction } from '../../components/ui.jsx'
+import { Alert, Button, Card, Checkbox, Confirm, DataTable, Empty, ErrorBox, Field, Input, Modal, PageHead, Select, Status, Textarea, useAction, useToast } from '../../components/ui.jsx'
 
 /** Prix et limites de chaque entreprise. Une limite vide signifie illimité. La durée est choisie par l'entreprise. */
 const termFields = [
@@ -54,6 +54,81 @@ export function Companies() {
   )
 }
 
+const COMPANY_ACTIONS = {
+  suspend: {
+    title: 'Suspendre cette entreprise',
+    question: 'Voulez-vous vraiment suspendre',
+    consequences: [
+      'Tous ses utilisateurs perdent l’accès immédiatement : administrateurs, personnel des entrepôts et chauffeurs.',
+      'Les chauffeurs ne peuvent plus enregistrer leurs opérations, même sur une livraison en cours : prévenez-les avant.',
+      'Aucune donnée n’est supprimée : commandes, stocks, livraisons, expéditions et factures sont conservés.',
+      'Vous pourrez la réactiver à tout moment avec le bouton « Réactiver ».',
+    ],
+    confirm: 'Suspendre l’entreprise', done: 'Entreprise suspendue.', endpoint: 'suspend',
+  },
+  close: {
+    title: 'Fermer cette entreprise',
+    question: 'Voulez-vous vraiment fermer définitivement',
+    consequences: [
+      'Tous ses utilisateurs perdent l’accès immédiatement et définitivement, chauffeurs compris.',
+      'L’entreprise disparaît de la liste des entreprises et ne peut plus être réactivée depuis l’interface.',
+      'Ses données restent conservées dans la base, mais ne sont plus accessibles depuis la plateforme.',
+      'Pour une interruption temporaire (impayé, contrôle), préférez « Suspendre ».',
+    ],
+    confirm: 'Fermer définitivement', done: 'Entreprise fermée.', endpoint: 'close',
+  },
+}
+
+/** Suspension ou fermeture : d'abord les conséquences, puis le mot de passe du Super Administrateur. */
+function CompanyActionModal({ action, company, onClose, onDone }) {
+  const a = COMPANY_ACTIONS[action]
+  const [step, setStep] = useState(1)
+  const [password, setPassword] = useState('')
+  const [reason, setReason] = useState('')
+  const [error, setError] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const toast = useToast()
+  const submit = async (e) => {
+    e.preventDefault()
+    setBusy(true)
+    setError(null)
+    try {
+      await api.post(`/companies/${company.id}/${a.endpoint}`, { password, reason: reason.trim() || undefined })
+      toast(a.done)
+      onDone()
+    } catch (err) {
+      setError(err)
+      setPassword('')
+      setBusy(false)
+    }
+  }
+  if (step === 1) {
+    return (
+      <Modal title={a.title} onClose={onClose} footer={<><Button onClick={onClose}>Non, annuler</Button><Button variant="danger" onClick={() => setStep(2)}>Oui, continuer</Button></>}>
+        <div className="stack">
+          <p>{a.question} <strong>{company.tradeName}</strong> ?</p>
+          <Alert tone="warn">
+            <strong>Cela entraînera :</strong>
+            <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>{a.consequences.map((t) => <li key={t}>{t}</li>)}</ul>
+          </Alert>
+        </div>
+      </Modal>
+    )
+  }
+  return (
+    <form onSubmit={submit}>
+      <Modal title={a.title} onClose={onClose} footer={<><Button onClick={() => setStep(1)}>Retour</Button><Button type="submit" variant="danger" loading={busy} disabled={!password}>{a.confirm}</Button></>}>
+        <div className="stack">
+          <ErrorBox error={error} />
+          <p className="muted small">Pour confirmer, saisissez <strong>votre</strong> mot de passe de Super Administrateur. L’action est enregistrée dans le journal d’audit de {company.tradeName}.</p>
+          <Field label="Votre mot de passe *"><Input type="password" required autoFocus autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} /></Field>
+          <Field label="Motif" hint="Facultatif, conservé dans le journal d’audit."><Textarea value={reason} maxLength={300} onChange={(e) => setReason(e.target.value)} placeholder={action === 'suspend' ? 'Ex. : abonnement impayé' : 'Ex. : fin de contrat'} /></Field>
+        </div>
+      </Modal>
+    </form>
+  )
+}
+
 export function CompanyDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -76,8 +151,8 @@ export function CompanyDetail() {
         <Status map={COMPANY_STATUS} value={c.status} />
         {c.status !== 'closed' && <Button variant="primary" onClick={async () => { await enterCompany(id); navigate('/') }}>Gérer cette entreprise</Button>}
         {['suspended', 'expired'].includes(c.status) && <Button variant="primary" loading={busy} onClick={() => act(() => api.post(`/companies/${id}/activate`, {}), 'Entreprise activée.')}>Réactiver</Button>}
-        {c.status === 'active' && <Button variant="danger" loading={busy} onClick={() => act(() => api.post(`/companies/${id}/suspend`, {}), 'Entreprise suspendue.')}>Suspendre</Button>}
-        {c.status !== 'closed' && <Button variant="danger" loading={busy} onClick={async () => { const r = await run(() => api.del(`/companies/${id}`), 'Entreprise fermée.'); if (r.ok) navigate('/admin/entreprises') }}>Fermer</Button>}
+        {c.status === 'active' && <Button variant="danger" onClick={() => setModal('suspend')}>Suspendre</Button>}
+        {c.status !== 'closed' && <Button variant="danger" onClick={() => setModal('close')}>Fermer</Button>}
       </>} />
       <div className="stack">
         <div className="grid grid-2">
@@ -120,6 +195,7 @@ export function CompanyDetail() {
           email={passwordFor.email} allowLink preferLink={false} onDone={accounts.reload} onClose={() => setPasswordFor(null)}
         />
       )}
+      {['suspend', 'close'].includes(modal) && <CompanyActionModal action={modal} company={c} onClose={() => setModal(null)} onDone={() => { setModal(null); if (modal === 'close') navigate('/admin/entreprises'); else reload() }} />}
       {modal === 'terms' && <FormModal wide title="Modifier l'abonnement" fields={termFields} row={sub} onClose={() => setModal(null)} onSubmit={async (v) => { await api.patch(`/companies/${id}/subscription`, v); setModal(null); reload() }}>
         <Alert tone="info">Une facture en attente est remplacée au nouveau montant. Les factures déjà payées ne changent pas.</Alert>
       </FormModal>}

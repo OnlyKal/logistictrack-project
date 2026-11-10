@@ -169,6 +169,16 @@ class _MissionScreenState extends State<MissionScreen> {
           gap,
           primary('Je suis arrivé', LucideIcons.mapPinCheck, () => _run(() => state.enqueue(deliveryId: m.id, action: 'arrive', label: 'Arrivée', localStatus: 'ARRIVED'))),
         ];
+      case 'ARRIVED' when m.isPickup:
+        return [
+          const Text(
+            "Retrait en entrepôt : déposez les colis à l'entrepôt. Il confirme leur réception et les remet lui-même au client.",
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Palette.muted, fontSize: 13),
+          ),
+          gap,
+          secondary('Livraison impossible', LucideIcons.circleX, () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => FailScreen(mission: m)))),
+        ];
       case 'ARRIVED':
         return [
           secondary('Livraison impossible', LucideIcons.circleX, () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => FailScreen(mission: m)))),

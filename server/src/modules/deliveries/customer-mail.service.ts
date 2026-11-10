@@ -2,6 +2,8 @@
  * E-mails aux clients d'une entreprise : en route, livrée (bon signé joint), échec.
  * Désactivés par défaut : l'entreprise les active dans ses Paramètres, et chaque client peut les refuser.
  * Un rappel du chauffeur par le bureau reste interne : le client n'est pas prévenu.
+ * Retrait en entrepôt : pas d'e-mail « en route » ; le client est prévenu quand sa marchandise l'attend,
+ * avec le même réglage que l'e-mail « en route » (suivi de l'acheminement).
  */
 import { Injectable } from '@nestjs/common'
 import type { TenantContext } from '../../common/context.js'
@@ -12,10 +14,10 @@ import { RECALLED } from '../../common/constants.js'
 import { companyTimeZone, formatDateTime } from '../../common/time.js'
 import { DocumentsService, FAILURE_LABELS, type DocumentType } from './documents.service.js'
 
-export type CustomerEvent = 'EN_ROUTE' | 'DELIVERED' | 'PARTIAL' | 'FAILED'
+export type CustomerEvent = 'EN_ROUTE' | 'PICKUP_READY' | 'DELIVERED' | 'PARTIAL' | 'FAILED'
 
 const SETTING: Record<CustomerEvent, 'customerEmailEnRoute' | 'customerEmailDelivered' | 'customerEmailFailed'> = {
-  EN_ROUTE: 'customerEmailEnRoute', DELIVERED: 'customerEmailDelivered', PARTIAL: 'customerEmailDelivered', FAILED: 'customerEmailFailed',
+  EN_ROUTE: 'customerEmailEnRoute', PICKUP_READY: 'customerEmailEnRoute', DELIVERED: 'customerEmailDelivered', PARTIAL: 'customerEmailDelivered', FAILED: 'customerEmailFailed',
 }
 
 @Injectable()
@@ -32,13 +34,15 @@ export class CustomerMailService {
     if (!settings?.[SETTING[event]]) return
     const d = await this.prisma.delivery.findFirst({
       where: { id: deliveryId, companyId },
-      include: { customer: true, deliveryPoint: true, driver: true, vehicle: true, company: { select: { tradeName: true } }, packages: { select: { trackingToken: true, trackingNumber: true }, take: 1 }, items: true },
+      include: { customer: true, deliveryPoint: true, pickupWarehouse: true, driver: true, vehicle: true, company: { select: { tradeName: true } }, packages: { select: { trackingToken: true, trackingNumber: true }, take: 1 }, items: true },
     })
     if (!d || !d.customer.email || !d.customer.emailNotifications || d.customer.status !== 'active') return
     if (event === 'FAILED' && d.failureReason === RECALLED) return
     const tz = await companyTimeZone(this.prisma, companyId)
     const company = d.company.tradeName
-    const place = [d.deliveryPoint.name, d.deliveryPoint.address, d.deliveryPoint.city].filter(Boolean).join(', ')
+    // Retrait : le lieu est l'entrepôt où le client vient chercher sa marchandise.
+    const site = d.mode === 'PICKUP' ? d.pickupWarehouse : null
+    const place = site ? [site.name, site.address].filter(Boolean).join(', ') : [d.deliveryPoint.name, d.deliveryPoint.address, d.deliveryPoint.city].filter(Boolean).join(', ')
     // Lien unique et signé : il ouvre la carte en direct pendant le trajet.
     const tracking = d.packages[0]?.trackingToken ? publicTrackingUrl(d.packages[0].trackingToken) : null
     const hello = `Bonjour ${d.customer.name},`
@@ -58,6 +62,25 @@ export class CustomerMailService {
             optOut,
           ].filter(Boolean),
           action: tracking ? { label: 'Suivre ma livraison', url: tracking } : undefined,
+        },
+      })
+      return
+    }
+
+    if (event === 'PICKUP_READY') {
+      await this.emails.send({
+        to: d.customer.email, kind: 'customer.pickup_ready', companyId, dedupeKey: `delivery:${d.id}:pickup_ready:${d.heldAtWarehouseId ?? ''}`,
+        content: {
+          subject: `Votre livraison ${d.number} est disponible au retrait`,
+          title: 'Votre marchandise vous attend',
+          paragraphs: [
+            hello,
+            `La livraison ${d.number} de ${company} est disponible au retrait : ${place}.`,
+            ...(site?.phone ? [`Téléphone de l'entrepôt : ${site.phone}.`] : []),
+            `Présentez-vous avec le numéro de suivi ${d.packages[0]?.trackingNumber ?? d.number}. Une signature pourra vous être demandée à la remise.`,
+            optOut,
+          ],
+          action: tracking ? { label: 'Voir ma livraison', url: tracking } : undefined,
         },
       })
       return

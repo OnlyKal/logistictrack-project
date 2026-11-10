@@ -1,6 +1,7 @@
 /** Administration du SaaS : entreprises, abonnements, facturation, utilisateurs, journaux. */
 import { BadGatewayException, BadRequestException, Body, ConflictException, Controller, Delete, ForbiddenException,Get, Headers, HttpCode, Injectable, Module, NotFoundException, Param, Patch, Post, Put, Query, Req, Res, StreamableFile, UploadedFile, UnauthorizedException, UseInterceptors } from '@nestjs/common'
 import { FileInterceptor } from '@nestjs/platform-express'
+import { Throttle } from '@nestjs/throttler'
 import { Prisma } from '@prisma/client'
 import bcrypt from 'bcryptjs'
 import type { Response } from 'express'
@@ -28,6 +29,8 @@ const subscriptionTerms = z.object({
 })
 const renewSchema = z.object({ durationMonths: duration.optional() })
 const paymentSchema = z.object({ invoiceId: uuid, provider: z.string().trim().min(2).max(40).default('manual'), externalRef: z.string().trim().min(2).max(120), amount: money, currency: z.string().length(3) })
+/** Action lourde sur une entreprise : mot de passe du Super Administrateur, motif facultatif. */
+const companyActionSchema = z.object({ password: z.string().min(1, 'Saisissez votre mot de passe.').max(200), reason: z.string().trim().max(300).optional() })
 const webhookSchema = z.object({ externalRef: z.string().min(2).max(120), invoiceNumber: z.string().min(2).max(40), amount: money, currency: z.string().length(3), status: z.enum(['SUCCEEDED', 'FAILED', 'REFUNDED']) })
 
 @Injectable()
@@ -354,17 +357,42 @@ export class CompaniesController {
     return company
   }
 
-  @SuperAdminOnly() @Post(':id/suspend') @HttpCode(200) @Msg('Entreprise suspendue.')
-  async suspend(@Ctx() ctx: AuthContext, @Param('id') id: string, @Body(zod(z.object({ reason: z.string().max(300).optional() }))) body: { reason?: string }) {
-    const company = await this.prisma.company.update({ where: { id }, data: { status: 'suspended' } })
-    await this.audit.log({ companyId: id, userId: ctx.userId, ip: ctx.ip }, 'company.suspend', 'Company', id, body)
+  /**
+   * Suspendre ou fermer coupe l'accès de toute une entreprise : le Super Administrateur confirme avec son mot de passe.
+   * Un mot de passe faux est refusé en 403 (jamais 401, qui fermerait sa propre session) et journalisé.
+   */
+  private async confirmPassword(ctx: AuthContext, companyId: string, action: string, password: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: ctx.userId }, select: { passwordHash: true } })
+    if (!user?.passwordHash || !(await bcrypt.compare(password, user.passwordHash))) {
+      await this.audit.log({ companyId, userId: ctx.userId, ip: ctx.ip }, `${action}_denied`, 'Company', companyId, { reason: 'bad_password' })
+      throw new ForbiddenException({ message: 'Mot de passe incorrect.', code: 'BAD_PASSWORD' })
+    }
+  }
+
+  private async liveCompany(id: string) {
+    const company = await this.prisma.company.findFirst({ where: { id, deletedAt: null } })
+    if (!company) throw new NotFoundException('Entreprise introuvable.')
     return company
   }
 
-  @SuperAdminOnly() @Delete(':id') @Msg('Entreprise fermée.')
-  async close(@Ctx() ctx: AuthContext, @Param('id') id: string) {
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @SuperAdminOnly() @Post(':id/suspend') @HttpCode(200) @Msg('Entreprise suspendue.')
+  async suspend(@Ctx() ctx: AuthContext, @Param('id') id: string, @Body(zod(companyActionSchema)) body: z.infer<typeof companyActionSchema>) {
+    const current = await this.liveCompany(id)
+    if (current.status === 'suspended') throw new ConflictException('Cette entreprise est déjà suspendue.')
+    await this.confirmPassword(ctx, id, 'company.suspend', body.password)
+    const company = await this.prisma.company.update({ where: { id }, data: { status: 'suspended' } })
+    await this.audit.log({ companyId: id, userId: ctx.userId, ip: ctx.ip }, 'company.suspend', 'Company', id, { reason: body.reason })
+    return company
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @SuperAdminOnly() @Post(':id/close') @HttpCode(200) @Msg('Entreprise fermée.')
+  async close(@Ctx() ctx: AuthContext, @Param('id') id: string, @Body(zod(companyActionSchema)) body: z.infer<typeof companyActionSchema>) {
+    await this.liveCompany(id)
+    await this.confirmPassword(ctx, id, 'company.close', body.password)
     const company = await this.prisma.company.update({ where: { id }, data: { status: 'closed', deletedAt: new Date() } })
-    await this.audit.log({ companyId: id, userId: ctx.userId, ip: ctx.ip }, 'company.close', 'Company', id)
+    await this.audit.log({ companyId: id, userId: ctx.userId, ip: ctx.ip }, 'company.close', 'Company', id, { reason: body.reason })
     return { id: company.id, status: company.status }
   }
 }

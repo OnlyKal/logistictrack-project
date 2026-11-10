@@ -5,7 +5,7 @@ import PDFDocument from 'pdfkit'
 import { FileService } from '../../common/core.services.js'
 import { DELIVERY_STATUS_LABELS, type DeliveryStatus } from '../../common/constants.js'
 import { PrismaService } from '../../common/prisma.service.js'
-import type { TenantContext } from '../../common/context.js'
+import { deliveryWarehouseScope, type TenantContext } from '../../common/context.js'
 
 export const DOCUMENT_TYPES = {
   'delivery-note': 'Bon de livraison',
@@ -31,11 +31,11 @@ export class DocumentsService {
 
   /** PDF d'une livraison : logo, coordonnées, marchandises, dates, signature et numéro de suivi. */
   async delivery(ctx: TenantContext, id: string, type: DocumentType): Promise<{ buffer: Buffer; filename: string }> {
-    const where = ctx.role === 'DRIVER' ? { id, companyId: ctx.companyId, driverId: ctx.driverId } : { id, companyId: ctx.companyId, ...(ctx.warehouseIds ? { warehouseId: { in: ctx.warehouseIds } } : {}) }
+    const where = ctx.role === 'DRIVER' ? { id, companyId: ctx.companyId, driverId: ctx.driverId } : { id, companyId: ctx.companyId, ...deliveryWarehouseScope(ctx) }
     const d = await this.prisma.delivery.findFirst({
       where,
       include: {
-        company: { include: { settings: { select: { timezone: true } } } }, customer: true, deliveryPoint: true, warehouse: true, driver: true, vehicle: true, order: true,
+        company: { include: { settings: { select: { timezone: true } } } }, customer: true, deliveryPoint: true, warehouse: true, pickupWarehouse: true, driver: true, vehicle: true, order: true,
         items: { include: { product: true } }, packages: true, proofs: true, history: { orderBy: { createdAt: 'asc' } },
       },
     })
@@ -55,7 +55,8 @@ export class DocumentsService {
       doc.fillColor(GREY).font('Helvetica').fontSize(9).text(`${label}  `, { continued: true }).fillColor(NAVY).text(value)
     }
     row('Client', `${d.customer.name} (${d.customer.code})`)
-    row('Point de livraison', `${d.deliveryPoint.name} — ${[d.deliveryPoint.address, d.deliveryPoint.commune, d.deliveryPoint.city].filter(Boolean).join(', ')}`)
+    if (d.mode === 'PICKUP' && d.pickupWarehouse) row('Retrait en entrepôt', [d.pickupWarehouse.name, d.pickupWarehouse.address].filter(Boolean).join(' — '))
+    row(d.mode === 'PICKUP' ? 'Adresse du client' : 'Point de livraison', `${d.deliveryPoint.name} — ${[d.deliveryPoint.address, d.deliveryPoint.commune, d.deliveryPoint.city].filter(Boolean).join(', ')}`)
     row('Contact', [d.deliveryPoint.contactName, d.deliveryPoint.phone].filter(Boolean).join(' / '))
     row('Entrepôt de départ', d.warehouse.name)
     row('Commande', d.order?.number)

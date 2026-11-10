@@ -10,7 +10,7 @@ import { DeliveriesService } from './deliveries.service.js'
 import { DOCUMENT_TYPES, DocumentsService, type DocumentType } from './documents.service.js'
 import { StockModule } from '../stock/stock.module.js'
 import {
-  assignSchema, cancelSchema, confirmSchema, deliveryPatch, deliverySchema, failSchema, incidentSchema, opSchema, packageSchema, partialSchema, proofSchema,
+  assignSchema, cancelSchema, confirmSchema, deliveryPatch, deliverySchema, failSchema, incidentSchema, opSchema, packageSchema, partialSchema, pickupSchema, proofSchema,
   rescheduleSchema, respondSchema, returnSchema, scanSchema, recallSchema } from './deliveries.schemas.js'
 
 type Q = Record<string, unknown>
@@ -99,7 +99,27 @@ export class DeliveriesController {
   @RequirePerm('delivery.view') @AllowDriver() @FinishesMission('delivery') @Post(':id/incidents') @Msg('Incident signalé.')
   incident(@Ctx() ctx: TenantContext, @Param('id') id: string, @Body(zod(incidentSchema)) body: z.infer<typeof incidentSchema>) { return this.svc.incident(ctx, id, body) }
 
-  @RequirePerm('delivery.resolve') @AllowDriver() @FinishesMission('delivery') @Post(':id/proofs') @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } })) @Msg('Preuve enregistrée.')
+  // ---------- Retrait en entrepôt (livraisons en mode PICKUP seulement) ----------
+
+  @RequirePerm('delivery.create', 'delivery.resolve') @Post(':id/pickup') @HttpCode(200) @Msg('Point de retrait enregistré.')
+  changePickup(@Ctx() ctx: TenantContext, @Param('id') id: string, @Body(zod(pickupSchema)) body: z.infer<typeof pickupSchema>) { return this.svc.changePickup(ctx, id, body) }
+
+  @RequirePerm('delivery.load', 'delivery.resolve') @Post(':id/pickup/available') @HttpCode(200) @Msg('Marchandise disponible au retrait.')
+  makeAvailable(@Ctx() ctx: TenantContext, @Param('id') id: string, @Body(zod(opSchema)) body: z.infer<typeof opSchema>) { return this.svc.makeAvailable(ctx, id, body) }
+
+  @RequirePerm('delivery.load', 'delivery.resolve') @FinishesMission('delivery') @Post(':id/pickup/receive') @HttpCode(200) @Msg('Marchandise réceptionnée : disponible au retrait.')
+  receiveAtPickup(@Ctx() ctx: TenantContext, @Param('id') id: string, @Body(zod(opSchema)) body: z.infer<typeof opSchema>) { return this.svc.receiveAtPickup(ctx, id, body) }
+
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @RequirePerm('delivery.load', 'delivery.resolve') @FinishesMission('delivery') @Post(':id/pickup/handover') @HttpCode(200) @Msg('Marchandise remise au client.')
+  handover(@Ctx() ctx: TenantContext, @Param('id') id: string, @Body(zod(confirmSchema)) body: z.infer<typeof confirmSchema>) { return this.svc.confirm(ctx, id, body, true) }
+
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @RequirePerm('delivery.load', 'delivery.resolve') @FinishesMission('delivery') @Post(':id/pickup/partial-handover') @HttpCode(200) @Msg('Remise partielle enregistrée.')
+  partialHandover(@Ctx() ctx: TenantContext, @Param('id') id: string, @Body(zod(partialSchema)) body: z.infer<typeof partialSchema>) { return this.svc.partialConfirm(ctx, id, body, true) }
+
+  /** L'entrepôt de retrait ajoute aussi ses preuves au guichet : le service limite ce cas au retrait. */
+  @RequirePerm('delivery.resolve', 'delivery.load') @AllowDriver() @FinishesMission('delivery') @Post(':id/proofs') @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } })) @Msg('Preuve enregistrée.')
   addProof(@Ctx() ctx: TenantContext, @Param('id') id: string, @Body(zod(proofSchema)) body: z.infer<typeof proofSchema>, @UploadedFile() file?: Express.Multer.File) {
     return this.svc.addProof(ctx, id, body, file)
   }
