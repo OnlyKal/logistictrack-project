@@ -28,7 +28,9 @@ const subscriptionTerms = z.object({
   gpsEnabled: z.boolean().default(true), graceDays: z.coerce.number().int().min(0).max(90).default(7),
 })
 const renewSchema = z.object({ durationMonths: duration.optional() })
-const paymentSchema = z.object({ invoiceId: uuid, provider: z.string().trim().min(2).max(40).default('manual'), externalRef: z.string().trim().min(2).max(120), amount: money, currency: z.string().length(3) })
+/** Référence de paiement lisible et unique : PAY-AAAAMMJJ-XXXXXX. */
+const paymentRef = () => `PAY-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${readableCode(6)}`
+const paymentSchema = z.object({ invoiceId: uuid, provider: z.string().trim().min(2).max(40).default('manual'), externalRef: z.string().trim().max(120).optional(), amount: money, currency: z.string().length(3) })
 /** Action lourde sur une entreprise : mot de passe du Super Administrateur, motif facultatif. */
 const companyActionSchema = z.object({ password: z.string().min(1, 'Saisissez votre mot de passe.').max(200), reason: z.string().trim().max(300).optional() })
 const webhookSchema = z.object({ externalRef: z.string().min(2).max(120), invoiceNumber: z.string().min(2).max(40), amount: money, currency: z.string().length(3), status: z.enum(['SUCCEEDED', 'FAILED', 'REFUNDED']) })
@@ -171,7 +173,11 @@ export class BillingController {
 
   /** Paiement enregistré manuellement par le Super Administrateur. */
   @SuperAdminOnly() @Post('admin/payments') @Msg('Paiement enregistré.')
-  recordPayment(@Ctx() ctx: AuthContext, @Body(zod(paymentSchema)) body: z.infer<typeof paymentSchema>) { return this.billing.applyPayment({ ...body, status: 'SUCCEEDED' }, ctx) }
+  recordPayment(@Ctx() ctx: AuthContext, @Body(zod(paymentSchema)) body: z.infer<typeof paymentSchema>) {
+    // Référence générée automatiquement si l'admin n'en saisit pas.
+    const externalRef = body.externalRef && body.externalRef.length >= 2 ? body.externalRef : paymentRef()
+    return this.billing.applyPayment({ ...body, externalRef, status: 'SUCCEEDED' }, ctx)
+  }
 
   @SuperAdminOnly() @Get('admin/invoices')
   async allInvoices(@Query() q: Record<string, unknown>) {

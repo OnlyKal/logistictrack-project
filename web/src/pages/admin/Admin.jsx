@@ -203,6 +203,24 @@ export function CompanyDetail() {
   )
 }
 
+/** Moyens de paiement proposés à l'enregistrement manuel (valeur stockée dans Payment.provider). */
+const PAYMENT_METHODS = [
+  { value: 'bank_transfer', label: 'Virement bancaire' },
+  { value: 'mobile_money', label: 'Mobile Money' },
+  { value: 'cash', label: 'Espèces' },
+  { value: 'cheque', label: 'Chèque' },
+  { value: 'card', label: 'Carte bancaire' },
+  { value: 'other', label: 'Autre' },
+]
+
+/** Référence de paiement lisible : PAY-AAAAMMJJ-XXXXXX (sans 0/O/1/I pour éviter les confusions). */
+function paymentRef() {
+  const alphabet = '23456789ABCDEFGHJKMNPQRSTUVWXYZ'
+  const bytes = crypto.getRandomValues(new Uint8Array(6))
+  const code = Array.from(bytes, (b) => alphabet[b % alphabet.length]).join('')
+  return `PAY-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${code}`
+}
+
 /** Facture : la durée et sa remise restent visibles, même si le montant mensuel change ensuite. */
 function InvoiceTable({ rows, company, action, loading, error }) {
   return (
@@ -224,7 +242,7 @@ export function Invoices() {
         <InvoiceTable company loading={loading} error={error} rows={items} action={(i) => i.status === 'UNPAID' && <Button variant="primary" onClick={() => setPay(i)}>Enregistrer le paiement</Button>} />
       </Card>
       {pay && <FormModal title={`Paiement : ${pay.number}`} submitLabel="Confirmer" onClose={() => setPay(null)} fields={[
-        { name: 'externalRef', label: 'Référence du paiement', required: true, hint: 'Numéro de transaction ou de virement.' }, { name: 'provider', label: 'Moyen de paiement', default: 'manual', required: true },
+        { name: 'externalRef', label: 'Référence du paiement', default: paymentRef(), hint: 'Générée automatiquement — remplacez-la par le numéro de transaction ou de virement si besoin.' }, { name: 'provider', label: 'Moyen de paiement', type: 'select', options: PAYMENT_METHODS, default: 'bank_transfer', required: true },
       ]} onSubmit={async (v) => { await api.post('/admin/payments', { ...v, invoiceId: pay.id, amount: pay.amount, currency: pay.currency }); setPay(null); reload() }} />}
     </>
   )
