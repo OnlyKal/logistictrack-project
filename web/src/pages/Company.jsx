@@ -132,6 +132,13 @@ export function Users() {
   )
 }
 
+/** Temps couvert jusqu'à l'échéance : cumule toutes les périodes déjà payées, y compris celles payées d'avance. */
+function remaining(endsAt) {
+  const days = Math.ceil((new Date(endsAt) - Date.now()) / 86400_000)
+  if (days <= 0) return 'Échu'
+  return days > 1 ? `${days} jours` : '1 jour'
+}
+
 export function Subscription() {
   const current = useFetch('/subscriptions/current')
   const invoices = useFetch('/subscriptions/invoices')
@@ -159,7 +166,7 @@ export function Subscription() {
             {sub ? (
               <dl className="kv">
                 <dt>Montant mensuel</dt><dd className="strong">{money(sub.monthlyAmount, sub.currency)}</dd><dt>État</dt><dd><Status map={SUBSCRIPTION_STATUS} value={sub.status} /></dd>
-                <dt>Échéance</dt><dd>{date(sub.endsAt)}</dd><dt>Durée</dt><dd>{trial ? 'Essai gratuit' : `${sub.durationMonths} mois`}</dd><dt>Suivi GPS</dt><dd>{sub.gpsEnabled ? 'Inclus' : 'Non inclus'}</dd>
+                <dt>Échéance</dt><dd>{date(sub.endsAt)}</dd><dt>Temps restant</dt><dd>{remaining(sub.endsAt)}</dd><dt>Dernière durée payée</dt><dd>{trial ? 'Essai gratuit' : `${sub.durationMonths} mois`}</dd><dt>Suivi GPS</dt><dd>{sub.gpsEnabled ? 'Inclus' : 'Non inclus'}</dd>
               </dl>
             ) : <Empty title="Aucun abonnement" />}
           </Card>
